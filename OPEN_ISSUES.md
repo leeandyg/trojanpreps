@@ -30,10 +30,26 @@ The `/api/redo` grader and the report on `gemini-3.8-flash` were tested with sim
 
 - **Streamed playback through `MediaSource`** in `useTTS`, and that the saved blob still replays.
 - **Barge-in threshold.** `BARGE_RMS = 0.045` is a guess. Too low and the interviewer cuts itself off on speakers or on keyboard noise; too high and you have to shout. Tune with real hardware.
+- **Speech recognition accuracy is the main remaining problem**, especially computer-science terms. Chrome's recognizer cannot be given a vocabulary in its default (cloud) mode. Options are written up in the team chat and summarized under "Not built".
 - **Barge-in on speakers.** Echo cancellation applies to the loudness watcher, but Chrome's speech recognizer captures the mic separately, so on speakers the transcript after a barge-in may start with the interviewer's own words. Headphones avoid this.
 - **Backchannel timing and frequency**, and whether an "mm-hm" on speakers gets transcribed as candidate speech.
 - **Backchannel right before a spoken reply.** A thought that draws a probe can get "mm-hm" and then the probe about a second later. May sound natural or may sound odd.
 - **Question detection** is a pattern match; it will miss some questions (they just get the normal 1.5s wait) and flag some statements.
+
+### Fixed after a code audit (2026-11-14), still to be confirmed by ear
+
+These were found by reading the code after the live voice felt inconsistent, and are fixed in code:
+
+- Interviewer replying twice to one utterance (a consult timer that re-armed on mic noise).
+- Interviewer's own last words appearing as candidate speech right after it finished.
+- Interviewer continuing to talk over the report page after End.
+- Coach probes never arriving when the candidate said a word or two after writing code.
+- Mic muted during the audio request, dropping words said in that gap.
+- A stalled voice stream leaving the interviewer stuck on "Speaking" with the mic muted.
+- A cough cutting the interviewer off and leaving silence.
+- No reply after the candidate answered a probe; now acknowledges or follows up.
+- Transcript split into fragments at every small pause; now merged.
+- Report page crashing when the model returned an object where text was expected; all model output is now coerced to the expected shape on the server.
 
 ## Known problems
 
@@ -55,6 +71,8 @@ The `/api/redo` grader and the report on `gemini-3.8-flash` were tested with sim
 - **`/?demo` calls the report API on every load** (twice in development).
 
 ## Not built
+
+- **A better speech recognizer.** Leading option: Deepgram Nova-3 streaming with a keyword list (vocabulary biasing, keeps "um"/"uh", word timings; free signup credit). Zero-cost options: Gemini's live transcription model on the existing key, or Chrome's on-device mode with a phrase list (Chrome 140+). None have been tested by us. It would replace `hooks/useSpeechRecognition.ts` behind the same interface.
 
 18. **Only one problem and one language.** The test harness assumes Two Sum's signature (see "Common changes" in the architecture doc).
 19. **No session persistence.** Refreshing the page loses the session and the report.

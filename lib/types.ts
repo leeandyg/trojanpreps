@@ -46,7 +46,8 @@ export type Decision = {
 
 export type InterviewerReply = {
   action: "speak" | "stay_silent";
-  kind: "clarification" | "hint" | "probe" | "wrapup" | "other";
+  // "followup" and "ack" only occur in reply to the candidate answering the interviewer's question
+  kind: "clarification" | "hint" | "probe" | "followup" | "ack" | "wrapup" | "other";
   say: string;
   grounding?: Grounding;
   decisions: Decision[];

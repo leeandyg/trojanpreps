@@ -47,6 +47,7 @@ Chrome is required: speech-to-text uses the Web Speech API. Restart the dev serv
 | Clarifying questions | Answered factually | Answered factually |
 | Hints | Declined neutrally | Three-step ladder: nudge, then name the technique, then one specific step |
 | Unexplained decisions in the code | Noted silently, saved for wrap-up | One short probe, at most every 25 seconds |
+| Candidate answers the interviewer's question | Neutral acknowledgement, or a neutral narrower follow-up; never says right or wrong | Confirms a good answer and hands back; follows up on a weak one (up to 2 times), then states the missing point and moves on |
 | Wrap-up | One neutral follow-up on correctness or complexity | One follow-up grounded in code and speech |
 
 ## How a session flows
@@ -88,11 +89,29 @@ The opening line is fixed text (`problem.intro`), not an LLM call.
 
 Only one consult runs at a time; a trigger that arrives meanwhile is queued (latest wins, `wrapup` is never displaced). The timing constants are at the top of [app/page.tsx](app/page.tsx).
 
+### When the candidate answers a question
+
+The browser works out whether the candidate's latest speech is an answer: the most recent interviewer line was a `probe`, `followup` or `wrapup`, and the candidate has spoken since. It sends `answering: true` and `followupsLeft` (starts at `MAX_FOLLOWUPS` = 2, minus follow-ups already asked on this question).
+
+The model must then respond rather than stay silent, with one of:
+
+- `ack`: the answer gave a correct reason. The decision is marked explained in the ledger and the interviewer hands the floor back in one short sentence.
+- `followup`: the answer was vague, only restated the code, or was wrong. One short question aimed at the gap. Not subject to the probe cooldown.
+- `stay_silent`: the candidate is still thinking ("hmm, let me think"), so wait.
+- `clarification`: the candidate asked something back.
+
+When follow-ups run out the interviewer stops pressing and moves on. The browser enforces the limit and relabels a `probe` that arrives while answering as a `followup`.
+
+### One thought, one transcript block
+
+Chrome's recognizer finalizes text at every small pause, which used to split one sentence into several transcript lines. Pieces less than `MERGE_GAP_MS` (2.5s) apart with nothing in between are now joined into one speech event, for both the on-screen transcript and what the model reads.
+
 ### Making the conversation feel live
 
 Still turn-based underneath (speech-to-text, then the model, then a voice), with four things layered on so it does not feel like it:
 
 - **Streaming voice.** `/api/tts` uses ElevenLabs' streaming endpoint and `useTTS` plays the audio as bytes arrive (through `MediaSource`), so the interviewer starts speaking after about 0.3s instead of after the whole clip downloads.
+- **Mute starts when sound starts.** The mic is muted from the moment audio actually plays, not from when the audio is requested, and the barge-in grace period counts from then too.
 - **Barge-in.** The mic's loudness is watched during the session ([hooks/voiceActivity.ts](hooks/voiceActivity.ts)) on a stream with echo cancellation. If the candidate talks over the interviewer (louder than `BARGE_RMS` for `BARGE_HOLD_MS`), the interviewer's audio stops at once, the mic is unmuted, and the line is marked `interrupted` so the model knows it was cut off.
 - **Backchannels.** Four short clips ("Mm-hm.", "Okay.", "Right.", "Got it.") are fetched once after the intro. After the candidate finishes a thought of 8 or more words that is not a question, one plays 0.7s later, at most every 14s. No model call is involved, and they are not logged in the transcript. They are skipped when the browser voice is in use.
 - **Faster answers to questions.** An utterance that looks like a direct question (a simple pattern check, `looksLikeQuestion`) waits 0.6s before consulting the model instead of 1.5s.
@@ -112,7 +131,13 @@ The browser sends the ledger back on the next call. Probes may only target a dec
 ### Guard rails enforced in the browser, not left to the prompt
 
 - `probeAllowed` is computed client-side (Coach mode and cooldown elapsed, or wrap-up). A probe that comes back when it was not allowed is dropped.
-- A probe is dropped if the candidate started talking or anything new was logged while the model was deciding.
+- **Any** reply is dropped if the candidate spoke while the model was deciding (wrap-up excepted). Their new speech has already queued a fresh consult that sees everything.
+- A `speech` consult only runs if there is speech the model has not seen yet, so mic noise cannot make the interviewer answer twice.
+- Model calls time out after 15s; `speech` and `wrapup` consults retry once. If an answer to the interviewer's question still gets no reply, a fixed "say that again?" line is spoken.
+- The code is only marked as "looked at" after a `code` consult or a spoken probe, so a passing remark does not use up new lines before they can be probed.
+- After End, nothing can speak or consult (`endedRef`).
+- A barge-in with no words following within 1.8s is treated as noise and the line is said again, once.
+- Whatever the recognizer started hearing while the interviewer was speaking is discarded even after the mic reopens, except on a barge-in.
 - Interview mode never sends `code` or `run` triggers at all.
 - Mic results are discarded while the interviewer's audio is playing, plus 400ms, so it does not transcribe itself. A barge-in ends that immediately.
 
@@ -178,7 +203,7 @@ The report page has a **replay**: a scrubbable timeline of the session where cod
 | [lib/format.ts](lib/format.ts) | Turns the timeline into the transcript the LLM reads; numbers code lines |
 | [lib/llm.ts](lib/llm.ts) | `chatJSON()`: one LLM call in JSON mode, with optional model override and fallback to the fast model |
 | [hooks/useSpeechRecognition.ts](hooks/useSpeechRecognition.ts) | Continuous Chrome speech-to-text with auto-restart and muting |
-| [hooks/useTTS.ts](hooks/useTTS.ts) | `speak(text)` streams and plays a line, resolving when it finishes or is stopped, and returns the audio blob URL for replay; `stop()` cuts it off; `preload(text)` fetches a clip; falls back to browser voice |
+| [hooks/useTTS.ts](hooks/useTTS.ts) | `speak(text, onStart)` streams and plays a line, resolving when it finishes, is stopped, or times out, and returns the audio blob URL for replay; `stop()` cuts it off; `preload(text)` fetches a clip; falls back to browser voice |
 | [hooks/voiceActivity.ts](hooks/voiceActivity.ts) | Mic loudness watcher used for barge-in |
 | [hooks/usePyodide.ts](hooks/usePyodide.ts) | Loads Pyodide and runs the code against the tests |
 

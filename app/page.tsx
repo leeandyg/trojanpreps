@@ -19,7 +19,10 @@ const QUESTION_SETTLE_MS = 600; // shorter wait when the utterance sounds like a
 // Barge-in: the candidate talking over the interviewer cuts the interviewer off.
 const BARGE_RMS = 0.045; // mic loudness that counts as speech
 const BARGE_HOLD_MS = 250; // how long it must stay that loud
-const BARGE_GRACE_MS = 500; // ignore the mic right after the interviewer starts (echo canceller settling)
+const BARGE_GRACE_MS = 500; // ignore the mic right after the interviewer's audio starts (echo canceller settling)
+const BARGE_CONFIRM_MS = 1800; // if no words are heard this long after a barge-in, it was noise: say the line again
+const CONSULT_TIMEOUT_MS = 15000; // give up on an interviewer model call after this long
+const SORRY_LINE = "Sorry, I lost you for a second. Could you say that again?";
 // Backchannels: short acknowledgements played without a model call.
 const BACKCHANNELS = ["Mm-hm.", "Okay.", "Right.", "Got it."];
 const BACKCHANNEL_DELAY_MS = 700; // pause after a thought before acknowledging it
@@ -28,6 +31,10 @@ const BACKCHANNEL_MIN_WORDS = 8;
 const BACKCHANNEL_VOLUME = 0.6;
 const CODE_SETTLE_MS = 4000; // no typing for this long before a code-triggered check
 const PROBE_COOLDOWN_MS = 25000; // minimum gap between unprompted probes
+const MAX_FOLLOWUPS = 2; // follow-up questions on one answer before the interviewer moves on
+// The recognizer cuts speech into pieces at small pauses. Pieces closer than this are shown as one block.
+const MERGE_GAP_MS = 2500;
+const QUESTION_KINDS = ["probe", "followup", "wrapup"]; // interviewer lines that expect an answer
 
 const STATE_LABEL: Record<AvatarState, string> = {
   listening: "Listening",
@@ -87,6 +94,12 @@ export default function Page() {
   const backTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastBackRef = useRef(0);
   const settleRef = useRef(SPEECH_SETTLE_MS);
+  const endedRef = useRef(false); // session over: nothing may speak or consult any more
+  const newSpeechRef = useRef(false); // the candidate has said something the model has not seen yet
+  const unmuteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resaidRef = useRef(new WeakSet<object>()); // lines already repeated once after a false barge-in
+  const lastActivityRef = useRef(0); // when the mic last heard the candidate
+  const speechSeqRef = useRef(0); // counts candidate utterances, to notice speech that arrived mid-request
   const speechTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const codeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const talkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -103,84 +116,137 @@ export default function Page() {
     setTimeline(timelineRef.current);
   }, []);
 
-  const say = useCallback(
-    async (text: string, kind: string, g?: Grounding) => {
-      const ev: TimelineEvent = { type: "interviewer", t: now(), text, kind, grounding: g };
-      addEvent(ev);
+  // Speaks a line that is already in the timeline.
+  const voice = useCallback(
+    async (ev: TimelineEvent & { type: "interviewer" }) => {
+      if (endedRef.current) return;
       currentLineRef.current = ev;
-      mutedRef.current = true;
+      if (unmuteTimer.current) clearTimeout(unmuteTimer.current);
       speakingRef.current = true;
-      speakStartRef.current = Date.now();
+      speakStartRef.current = Infinity; // no barge-in until sound is actually playing
       setSpeaking(true);
-      const url = await tts.speak(text);
+      // The mic is only muted once audio starts, so words said while it loads are not lost.
+      const url = await tts.speak(ev.text, () => {
+        mutedRef.current = true;
+        speakStartRef.current = Date.now();
+      });
       if (url) ev.audioUrl = url;
       speakingRef.current = false;
       setSpeaking(false);
       // After a barge-in the mic is already live again; otherwise let the echo die out first.
-      if (!ev.interrupted) setTimeout(() => !speakingRef.current && (mutedRef.current = false), 400);
+      if (!ev.interrupted) unmuteTimer.current = setTimeout(() => (mutedRef.current = false), 400);
     },
-    [addEvent, tts]
+    [tts]
   );
 
-  // The candidate started talking over the interviewer: stop and listen.
-  const bargeIn = useCallback(() => {
-    if (!speakingRef.current) return;
-    if (currentLineRef.current?.type === "interviewer") currentLineRef.current.interrupted = true;
-    mutedRef.current = false;
-    tts.stop();
-  }, [tts]);
+  const say = useCallback(
+    async (text: string, kind: string, g?: Grounding) => {
+      if (endedRef.current) return;
+      const ev = { type: "interviewer" as const, t: now(), text, kind, grounding: g };
+      addEvent(ev);
+      await voice(ev);
+    },
+    [addEvent, voice]
+  );
 
   // Ask the interviewer model whether to say anything, given everything so far.
   const consult = useCallback(
     async (trigger: Trigger) => {
+      if (endedRef.current) return;
       if (busyRef.current) {
         if (pendingRef.current !== "wrapup") pendingRef.current = trigger;
         return;
       }
+      // A speech consult with nothing new to hear would just make the interviewer repeat itself.
+      if (trigger === "speech" && !newSpeechRef.current) return;
+      newSpeechRef.current = false;
       busyRef.current = true;
       setThinking(true);
-      const sentAt = timelineRef.current.length;
+      const sentSeq = speechSeqRef.current;
+      const sentTime = Date.now();
       const probeAllowed =
         trigger === "wrapup" || (modeRef.current === "coach" && now() - lastProbeRef.current > PROBE_COOLDOWN_MS);
-      lastCheckedCodeRef.current = codeRef.current;
-      try {
+      // Is the candidate's latest speech an answer to a question the interviewer just asked?
+      const tl = timelineRef.current;
+      const lastLine = tl.findLast((e) => e.type === "interviewer");
+      const answering =
+        trigger === "speech" &&
+        tl[tl.length - 1]?.type !== "interviewer" &&
+        lastLine?.type === "interviewer" &&
+        QUESTION_KINDS.includes(lastLine.kind) &&
+        tl.slice(tl.indexOf(lastLine)).some((e) => e.type === "speech");
+      // Follow-ups already spent on this question.
+      let followups = 0;
+      for (let i = tl.length - 1; i >= 0; i--) {
+        const e = tl[i];
+        if (e.type !== "interviewer") continue;
+        if (e.kind !== "followup") break;
+        followups++;
+      }
+      const followupsLeft = Math.max(0, MAX_FOLLOWUPS - followups);
+      const sentCode = codeRef.current;
+      const body = JSON.stringify({
+        mode: modeRef.current,
+        trigger,
+        code: sentCode,
+        timeline: tl,
+        run: runRef.current,
+        decisions: decisionsRef.current,
+        hintLevel: hintRef.current,
+        probeAllowed,
+        answering,
+        followupsLeft,
+      });
+      const ask = async (): Promise<InterviewerReply> => {
         const res = await fetch("/api/interviewer", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            mode: modeRef.current,
-            trigger,
-            code: codeRef.current,
-            timeline: timelineRef.current,
-            run: runRef.current,
-            decisions: decisionsRef.current,
-            hintLevel: hintRef.current,
-            probeAllowed,
-          }),
+          body,
+          signal: AbortSignal.timeout(CONSULT_TIMEOUT_MS),
         });
-        const reply: InterviewerReply & { error?: string } = await res.json();
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        return data;
+      };
+      try {
+        // The candidate is waiting on speech and wrap-up consults, so those get one retry.
+        const reply = await ask().catch((e) => {
+          if (trigger === "code" || trigger === "run") throw e;
+          return ask();
+        });
         setThinking(false);
-        if (reply.error) throw new Error(reply.error);
+        if (endedRef.current) return;
 
         decisionsRef.current = reply.decisions;
         setDecisions(reply.decisions);
 
-        const isProbe = reply.kind === "probe";
-        // The candidate started talking again while we were deciding: an
-        // unprompted probe is now an interruption, so drop it.
-        const stale = isProbe && (talkingRef.current || timelineRef.current.length !== sentAt);
-        if (reply.action === "speak" && !(isProbe && !probeAllowed) && !stale) {
+        // A question asked in reply to an answer is a follow-up, whatever the model called it.
+        let kind = reply.kind;
+        if (answering && kind === "probe") kind = "followup";
+        if (!answering && (kind === "followup" || kind === "ack")) kind = "other";
+        const allowed =
+          kind === "probe" ? probeAllowed : kind === "followup" ? followupsLeft > 0 : true;
+        // The candidate kept talking while we were deciding. Speaking now would cut across
+        // them, and the reply is based on half of what they said. Their new speech has
+        // already queued another consult, so drop this one.
+        const stale = trigger !== "wrapup" && (lastActivityRef.current > sentTime || speechSeqRef.current !== sentSeq);
+        if (reply.action === "speak" && allowed && !stale) {
           hintRef.current = Math.max(hintRef.current, reply.hint_level);
           const g = reply.grounding?.code_quote || reply.grounding?.said_quote ? reply.grounding : undefined;
-          if (isProbe || reply.kind === "wrapup") {
+          if (kind === "probe" || kind === "followup" || kind === "wrapup") {
             lastProbeRef.current = now();
             setGrounding(g || null);
           }
-          await say(reply.say, reply.kind, g);
+          await say(reply.say, kind, g);
         }
+        // Only count this code as looked at when the look could have led to a probe;
+        // otherwise a passing "okay" would use up the candidate's new lines unseen.
+        if (!stale && (trigger === "code" || kind === "probe")) lastCheckedCodeRef.current = sentCode;
       } catch (e) {
         console.error(e);
         setThinking(false);
+        // Don't leave an answer hanging in silence when the model call failed twice.
+        if (answering && lastLine?.type === "interviewer") await say(SORRY_LINE, lastLine.kind);
       } finally {
         busyRef.current = false;
         const next = pendingRef.current;
@@ -192,13 +258,35 @@ export default function Page() {
   );
 
   // --- candidate speech ---
+  // Consult once the candidate has been quiet for `ms`. The timer clears itself when it
+  // fires, so later mic activity cannot re-arm a consult that has nothing new to send.
+  const armSpeechTimer = (ms: number) => {
+    if (speechTimer.current) clearTimeout(speechTimer.current);
+    speechTimer.current = setTimeout(() => {
+      speechTimer.current = null;
+      consult("speech");
+    }, ms);
+  };
+
   const onUtterance = useCallback(
     (text: string, start: number, end: number, isTyped = false) => {
-      addEvent({ type: "speech", t: start, start, end, text, typed: isTyped || undefined });
+      if (endedRef.current) return;
+      newSpeechRef.current = true;
+      speechSeqRef.current++;
+      // Join this piece onto the previous one if the candidate barely paused, so one
+      // thought is one block in the transcript (and one line for the model).
+      const tl = timelineRef.current;
+      const prev = tl[tl.length - 1];
+      if (!isTyped && prev?.type === "speech" && !prev.typed && start - prev.end < MERGE_GAP_MS) {
+        text = `${prev.text} ${text}`;
+        timelineRef.current = [...tl.slice(0, -1), { ...prev, end, text }];
+        setTimeline(timelineRef.current);
+      } else {
+        addEvent({ type: "speech", t: start, start, end, text, typed: isTyped || undefined });
+      }
       const question = looksLikeQuestion(text);
       settleRef.current = isTyped ? 0 : question ? QUESTION_SETTLE_MS : SPEECH_SETTLE_MS;
-      if (speechTimer.current) clearTimeout(speechTimer.current);
-      speechTimer.current = setTimeout(() => consult("speech"), settleRef.current);
+      armSpeechTimer(settleRef.current);
 
       // Acknowledge a finished thought with a quick "mm-hm", the way a person on a call would.
       if (backTimer.current) clearTimeout(backTimer.current);
@@ -214,19 +302,22 @@ export default function Page() {
         }, BACKCHANNEL_DELAY_MS);
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [addEvent, consult]
   );
 
   const stt = useSpeechRecognition(
     {
-      onFinal: (text, s, e) => onUtterance(text, s - startRef.current, e - startRef.current),
+      onFinal: (text, s, e) => {
+        // On speakers the mic can pick up our own "mm-hm"; that is not the candidate.
+        const echo = Date.now() - lastBackRef.current < 2500 && /^(m+-?h+m+|okay|ok|right|got it)[.!]?$/i.test(text.trim());
+        if (!echo) onUtterance(text, s - startRef.current, e - startRef.current);
+      },
       onActivity: () => {
         // Still talking: hold off consulting until they finish the thought.
-        if (speechTimer.current) {
-          clearTimeout(speechTimer.current);
-          speechTimer.current = setTimeout(() => consult("speech"), SPEECH_SETTLE_MS);
-        }
+        if (speechTimer.current) armSpeechTimer(SPEECH_SETTLE_MS);
         if (backTimer.current) clearTimeout(backTimer.current);
+        lastActivityRef.current = Date.now();
         talkingRef.current = true;
         setCandidateTalking(true);
         if (talkTimer.current) clearTimeout(talkTimer.current);
@@ -238,6 +329,34 @@ export default function Page() {
     },
     mutedRef
   );
+
+  // The candidate started talking over the interviewer: stop and listen.
+  const bargeIn = () => {
+    const ev = currentLineRef.current;
+    if (!speakingRef.current || ev?.type !== "interviewer") return;
+    ev.interrupted = true;
+    stt.keepHeard(); // what the mic heard during the mute is the candidate, keep it
+    mutedRef.current = false;
+    tts.stop();
+    // A cough or a keyboard clatter can trip this. If no words follow, it was not a real
+    // interruption, so say the line again (once) instead of leaving dead air.
+    const at = Date.now();
+    setTimeout(() => {
+      const heardWords = lastActivityRef.current > at;
+      if (endedRef.current || heardWords || busyRef.current || speakingRef.current || resaidRef.current.has(ev)) return;
+      resaidRef.current.add(ev);
+      ev.interrupted = false;
+      busyRef.current = true;
+      voice(ev).finally(() => {
+        busyRef.current = false;
+        const next = pendingRef.current;
+        pendingRef.current = null;
+        if (next) consult(next);
+      });
+    }, BARGE_CONFIRM_MS);
+  };
+  const bargeInRef = useRef(bargeIn);
+  bargeInRef.current = bargeIn;
 
   // --- code edits ---
   const onCodeChange = (value?: string) => {
@@ -273,6 +392,7 @@ export default function Page() {
 
   // --- session lifecycle ---
   const startSession = async () => {
+    endedRef.current = false;
     startRef.current = Date.now();
     setPhase("live");
     navigator.mediaDevices
@@ -290,7 +410,7 @@ export default function Page() {
           loudMs = listening && rms > BARGE_RMS ? loudMs + 50 : 0;
           if (loudMs >= BARGE_HOLD_MS) {
             loudMs = 0;
-            bargeIn();
+            bargeInRef.current();
           }
         });
         const rec = new MediaRecorder(stream);
@@ -309,6 +429,7 @@ export default function Page() {
     busyRef.current = true;
     await say(problem.intro, "intro");
     busyRef.current = false;
+    if (endedRef.current) return;
     // Fetch the backchannel clips one at a time, after the intro, to stay under the voice provider's concurrency limit.
     (async () => {
       for (const phrase of BACKCHANNELS) {
@@ -322,10 +443,12 @@ export default function Page() {
   };
 
   const endSession = async () => {
+    endedRef.current = true;
+    pendingRef.current = null;
     stt.stop();
     tts.stop();
     stopVoiceWatchRef.current?.();
-    [speechTimer, codeTimer, talkTimer, backTimer].forEach((t) => t.current && clearTimeout(t.current));
+    [speechTimer, codeTimer, talkTimer, backTimer, unmuteTimer].forEach((t) => t.current && clearTimeout(t.current));
     (videoRef.current?.srcObject as MediaStream | null)?.getTracks().forEach((t) => t.stop());
     if (recorderRef.current?.state === "recording") recorderRef.current.stop();
     showReport(now());
@@ -521,7 +644,7 @@ export default function Page() {
             <input
               value={typed}
               onChange={(e) => setTyped(e.target.value)}
-              placeholder={stt.supported ? "Mic not picking you up? Type what you'd say" : "No speech recognition in this browser (use Chrome). Type here"}
+              placeholder={stt.blocked ? "Microphone is blocked. Allow it in the address bar, or type here" : stt.supported ? "Mic not picking you up? Type what you'd say" : "No speech recognition in this browser (use Chrome). Type here"}
             />
           </form>
         </section>

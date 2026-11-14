@@ -4,6 +4,11 @@ import { REPORT_SYSTEM } from "@/lib/prompts";
 import { formatTimeline, numberLines } from "@/lib/format";
 import type { Evidence, Report, TimelineEvent } from "@/lib/types";
 
+// The model sometimes returns an object or list where a sentence was asked for.
+// Flatten anything like that to plain text so the page can always render it.
+const text = (v: unknown): string =>
+  v == null ? "" : typeof v === "object" ? Object.values(v).map(text).filter(Boolean).join(" ") : String(v);
+
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 export async function POST(req: Request) {
@@ -27,7 +32,25 @@ DELIVERY METRICS
 ${JSON.stringify(metrics)}`;
 
   try {
-    const report = await chatJSON<Report>(REPORT_SYSTEM, user, 0.2, REPORT_MODEL);
+    const raw = await chatJSON<any>(REPORT_SYSTEM, user, 0.2, REPORT_MODEL);
+    const evidence = (e: any) => ({ source: e?.source === "wrote" ? "wrote" : "said", quote: text(e?.quote) }) as Evidence;
+    const score = (s: any) => ({ score: Math.min(4, Math.max(1, Math.round(Number(s?.score) || 1))), why: text(s?.why) });
+    const report: Report = {
+      summary: text(raw.summary),
+      delivery: text(raw.delivery),
+      scores: {
+        correctness: score(raw.scores?.correctness),
+        edge_cases: score(raw.scores?.edge_cases),
+        complexity_tradeoffs: score(raw.scores?.complexity_tradeoffs),
+        clarity: score(raw.scores?.clarity),
+      },
+      strength: { observation: text(raw.strength?.observation), evidence: evidence(raw.strength?.evidence) },
+      missed_explanation: {
+        observation: text(raw.missed_explanation?.observation),
+        evidence: evidence(raw.missed_explanation?.evidence),
+      },
+      retry_exercise: { exercise: text(raw.retry_exercise?.exercise), evidence: evidence(raw.retry_exercise?.evidence) },
+    };
 
     // Check each quote really appears in what was said or written.
     const said = norm(
