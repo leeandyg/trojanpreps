@@ -7,6 +7,14 @@ An **MVP** of a voice-driven mock technical interview web app, built for the AI@
 - Read [ARCHITECTURE.md](ARCHITECTURE.md) before changing behavior. Check [OPEN_ISSUES.md](OPEN_ISSUES.md) for known gaps before "fixing" something that is already known.
 - Scope is deliberately small: one problem (Two Sum), one language (Python), two modes (Interview, Coach), Chrome only.
 
+## Team
+
+- **Two developers**, both working on `main` in https://github.com/leeandyg/ai-usc-hackathon. No PR process.
+- The other dev may have pushed since you last looked. Run `git pull` before starting work, and pull again before pushing.
+- Keep commits small and focused so the other dev can follow and merge easily. Do not rewrite shared history (no force-push to `main`).
+- The committed docs are how the two devs stay in sync. Anything the other dev needs to know goes in them, not only in chat.
+- Each dev keeps their own `.env.local` (copied from `.env.example`) and may keep a personal `HANDOFF.md`. Both are gitignored, so the other dev cannot see them.
+
 ## Priorities
 
 1. **The demo works.** The demo script at the end of ARCHITECTURE.md must keep working end to end. Do not break it.
@@ -29,7 +37,15 @@ An **MVP** of a voice-driven mock technical interview web app, built for the AI@
 
 - Run `npx tsc --noEmit` (and `npm run build` for larger changes). Report failures honestly.
 - Browser-only features (mic, audio, Pyodide, camera) cannot be verified from the terminal. Say so instead of claiming they work.
-- If you change how something works, update ARCHITECTURE.md. If you find or leave a known problem, add it to OPEN_ISSUES.md.
+
+## Keep the docs current
+
+Update the docs after every change and at the end of every session, in the same commit as the code where possible. Stale docs mislead the other dev.
+
+- **[ARCHITECTURE.md](ARCHITECTURE.md):** any change to behavior, flow, triggers, timing values, env vars, the file map, or the demo script.
+- **[OPEN_ISSUES.md](OPEN_ISSUES.md):** add problems you find or leave behind. Remove or mark items you fix. Move items out of "Not yet tested" once they have actually been checked in a browser.
+- **AGENTS.md (this file):** changes to stack, rules, scope, or team workflow.
+- **HANDOFF.md** (local, if present): at the end of a session, refresh state, what was verified, and next steps.
 
 <!-- BEGIN:nextjs-agent-rules -->
 
