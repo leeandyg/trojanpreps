@@ -14,6 +14,16 @@ The API routes were tested with simulated requests against the real Gemini and E
 6. **The trigger timing in practice**: whether 1.5s after speech and 4s after typing feel right, and whether the 25s probe cooldown is too long or short for a 3-minute demo.
 7. **A full session through to the report** with real speech, including the metrics.
 
+### Replay and redo (added later, also untested in a browser)
+
+The `/api/redo` grader and the report on `gemini-3.8-flash` were tested with simulated requests. The UI below compiles but has not been seen running:
+
+- **Replay timeline rendering and seeking**, including lane alignment and the playhead. `/?demo` loads a canned session to check this without a mic.
+- **Session audio recording and synced playback.** Chrome reports recorded audio as endless until it is seeked once; there is a workaround in `Replay.tsx` that needs checking. Audio and the replay clock may drift on long sessions.
+- **Mic recording alongside speech recognition.** Both use the mic at once; this normally works in Chrome but is unconfirmed here.
+- **Interviewer lines replaying** at the right moments, and at 1.5× and 2×.
+- **Redo recording**: the 45s countdown, and whether the last words arrive before grading (it waits 900ms after Stop).
+
 ## Known problems
 
 8. **Filler words are undercounted.** Chrome's recognizer usually drops "um" and "uh". The report states this. Possible fix: record the mic and re-transcribe at the end with a model prompted to keep disfluencies.
@@ -27,11 +37,16 @@ The API routes were tested with simulated requests against the real Gemini and E
 16. **No handling for a failed interviewer call** beyond a console error; the avatar just returns to Waiting.
 17. **No mic-permission-denied message.** The typed fallback box still works, but nothing tells the user why the mic is silent.
 
+- **The report is slower now.** About 9s on `gemini-3.8-flash`, versus about 2s on the lite model. Redo grading takes 4 to 6s.
+- **Interviewer audio is missing from the replay when the browser voice was used** (no blob to replay), and the mic recording will contain the interviewer's voice if speakers were used, so it can play twice.
+- **Redo targets depend on the ledger's `code_quote` matching the code exactly.** If the model's quote does not appear in any snapshot, the moment is placed at the end of the session.
+- **Replay holds every keystroke's full code in memory.** Fine for a 10-minute session; not for long ones.
+- **`/?demo` calls the report API on every load** (twice in development).
+
 ## Not built
 
 18. **Only one problem and one language.** The test harness assumes Two Sum's signature (see "Common changes" in the architecture doc).
 19. **No session persistence.** Refreshing the page loses the session and the report.
-20. **Report does not show the transcript timeline** (when the silent stretches happened). The data is there in the timeline.
 21. **No camera analysis.** Out of scope by design; the camera is only there to make it feel like a call.
 22. **Design tradeoffs** are scored together with complexity, not as their own score.
 

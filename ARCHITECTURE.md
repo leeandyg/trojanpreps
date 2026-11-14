@@ -25,6 +25,7 @@ npm run dev                   # open http://localhost:3000 in Chrome
 | Variable | Purpose |
 |---|---|
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | Any OpenAI-compatible chat endpoint. Currently Gemini (`gemini-3.5-flash-lite`) through Google's OpenAI-compatible URL. Changing provider means changing these three. |
+| `REPORT_MODEL` | Stronger, slower model for the end report and redo grading (currently `gemini-3.8-flash`, about 5 to 9s per call). Falls back to `LLM_MODEL` if unset or if the call fails. The live interviewer always uses `LLM_MODEL` for speed. |
 | `TTS_PROVIDER` | `elevenlabs` or `browser` (Chrome's built-in voice, no key). |
 | `TTS_API_KEY` | ElevenLabs key. |
 | `TTS_VOICE`, `TTS_MODEL` | Optional ElevenLabs voice id and model id. |
@@ -130,12 +131,32 @@ Utterances entered through the typed fallback box are excluded from pace.
 
 The server then checks that each quote really appears in the transcript or code (case and punctuation ignored) and sets `verified`. The report page labels unverified quotes "(paraphrased)". The page also shows the metrics, the ledger as an explained / not-explained checklist, and the final code.
 
+## Replay and redo
+
+The report page has a **replay**: a scrubbable timeline of the session where code, transcript and audio move together.
+
+- **What is recorded during the session** (all in the browser, nothing persisted):
+  - `codeHistory`: the editor contents after every edit, with timestamps. This replaced the old list of edit timestamps and also feeds the metrics.
+  - The mic, with `MediaRecorder`, as one audio blob for the whole session.
+  - Each interviewer line's audio blob URL (`audioUrl` on the timeline event), when the premium voice was used.
+- **Timeline lanes:** you talking, interviewer (probes in purple), typing bursts, with stretches of typing in silence (8s or more) hatched in red. Test runs and unexplained decisions (⚑) are pinned on it.
+- **Playback** is driven by the component's own clock, not the audio element, so it works when there is no recording. The mic audio is slaved to that clock, and interviewer lines play as the playhead reaches them. Speeds: 1×, 1.5×, 2×.
+- Clicking the track or a transcript line seeks. The code pane shows the editor as it was at the playhead.
+
+**Redo the moment.** Each unexplained decision becomes a redo target placed at the time its line first appeared in the editor. The candidate sees the code as it was then (line highlighted) and what they said within 30s of it, records up to 45s re-explaining it, and `/api/redo` grades the retake against the first attempt: explained or not, a 1 to 4 score, what improved (quoting the retake), what is still missing, and a model answer shown only after an attempt. A passing retake marks the decision "Explained on your retake" in the ledger. Entry points: the ⚑ moments under the timeline, the ledger, the report's "Missed explanation" box, and "Redo from here" at any playhead position (targets whatever was written in the previous 30s).
+
+**Demo data:** opening `/?demo` loads a canned session ([lib/demoSession.ts](lib/demoSession.ts)) straight into the report, without audio. Use it to work on the report, replay and redo without doing an interview.
+
 ## File map
 
 | Path | What it does |
 |---|---|
 | [app/page.tsx](app/page.tsx) | The interview room and all orchestration: triggers, consult queue, session start and end |
-| [components/Report.tsx](components/Report.tsx) | Report page |
+| [components/Report.tsx](components/Report.tsx) | Report page; builds the redo targets from the ledger and code history |
+| [components/Replay.tsx](components/Replay.tsx) | Scrubbable session timeline with synced code, transcript and audio |
+| [components/Redo.tsx](components/Redo.tsx) | Re-record and grade one moment |
+| [app/api/redo/route.ts](app/api/redo/route.ts) | Grades a retake against the first attempt |
+| [lib/demoSession.ts](lib/demoSession.ts) | Canned session for `/?demo` |
 | [app/api/interviewer/route.ts](app/api/interviewer/route.ts) | Builds the interviewer prompt, calls the LLM, normalizes the reply |
 | [app/api/report/route.ts](app/api/report/route.ts) | Builds the report prompt, calls the LLM, verifies quotes |
 | [app/api/tts/route.ts](app/api/tts/route.ts) | Proxies ElevenLabs; a non-200 response tells the client to use the browser voice |
@@ -144,9 +165,9 @@ The server then checks that each quote really appears in the transcript or code 
 | [lib/types.ts](lib/types.ts) | Shared types: `TimelineEvent`, `Decision`, `InterviewerReply`, `Metrics`, `Report` |
 | [lib/metrics.ts](lib/metrics.ts) | Delivery metrics |
 | [lib/format.ts](lib/format.ts) | Turns the timeline into the transcript the LLM reads; numbers code lines |
-| [lib/llm.ts](lib/llm.ts) | `chatJSON()`: one LLM call in JSON mode |
+| [lib/llm.ts](lib/llm.ts) | `chatJSON()`: one LLM call in JSON mode, with optional model override and fallback to the fast model |
 | [hooks/useSpeechRecognition.ts](hooks/useSpeechRecognition.ts) | Continuous Chrome speech-to-text with auto-restart and muting |
-| [hooks/useTTS.ts](hooks/useTTS.ts) | `speak(text)`, resolves when audio finishes; falls back to browser voice |
+| [hooks/useTTS.ts](hooks/useTTS.ts) | `speak(text)`, resolves when audio finishes and returns the audio blob URL for replay; falls back to browser voice |
 | [hooks/usePyodide.ts](hooks/usePyodide.ts) | Loads Pyodide and runs the code against the tests |
 
 ## Common changes
@@ -164,3 +185,4 @@ The server then checks that each quote really appears in the transcript or code 
 4. Think aloud, then pause. The interviewer stays silent.
 5. Ask for a hint twice; the second is more specific.
 6. Run tests, click "I'm done", answer the follow-up, then "End & get report".
+7. On the report, press Play on the replay, click a ⚑ moment, and "Redo this moment". Give a weak explanation first, then a good one, to show the grading change.

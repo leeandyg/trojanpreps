@@ -7,8 +7,34 @@ export type Grounding = { code_quote: string; said_quote: string };
 // t / start / end are milliseconds since the session started.
 export type TimelineEvent =
   | { type: "speech"; t: number; start: number; end: number; text: string; typed?: boolean }
-  | { type: "interviewer"; t: number; text: string; kind: string; grounding?: Grounding }
+  // audioUrl is a browser blob URL of the spoken line, kept so the replay can play it back
+  | { type: "interviewer"; t: number; text: string; kind: string; grounding?: Grounding; audioUrl?: string }
   | { type: "run"; t: number; passed: number; total: number; summary: string };
+
+// The editor contents after each edit, for replay.
+export type CodeSnapshot = { t: number; code: string };
+
+// A point in the session the candidate can re-explain.
+export type RedoTarget = {
+  key: string;
+  t: number;
+  description: string; // what to explain
+  code_quote: string; // the line(s) it is about
+  code: string; // editor contents at that moment
+  firstSaid: string; // what the candidate said around then, possibly empty
+};
+
+export type RedoResult = {
+  retake: string;
+  explained: boolean;
+  score: number; // 1..4
+  verdict: string;
+  improved: string;
+  still_missing: string;
+  model_answer: string;
+  wpm: number;
+  fillers: number;
+};
 
 export type Decision = {
   id: string;

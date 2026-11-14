@@ -1,5 +1,13 @@
 "use client";
-import type { Decision, Evidence, Metrics, Mode, Report, RunResult } from "@/lib/types";
+import { useMemo, useState } from "react";
+import { clock } from "@/lib/format";
+import Replay, { snapshotAt, type Moment } from "./Replay";
+import Redo from "./Redo";
+import type {
+  CodeSnapshot, Decision, Evidence, Metrics, Mode, RedoResult, RedoTarget, Report, RunResult, TimelineEvent,
+} from "@/lib/types";
+
+const NEARBY_MS = 30000; // how far around a moment to look for what was said
 
 const SCORE_LABELS: [keyof Report["scores"], string][] = [
   ["clarity", "Clarity of reasoning"],
@@ -34,9 +42,87 @@ export default function ReportView(props: {
   run: RunResult | null;
   error: string;
   mode: Mode;
+  timeline: TimelineEvent[];
+  codeHistory: CodeSnapshot[];
+  durationMs: number;
+  audioUrl: string | null;
+  audioOffsetMs: number;
 }) {
-  const { report, metrics: m, decisions, code, run, error, mode } = props;
-  const explained = decisions.filter((d) => d.explained).length;
+  const { report, metrics: m, decisions, code, run, error, mode, timeline, codeHistory, durationMs } = props;
+  const [seek, setSeek] = useState<{ t: number; n: number } | null>(null);
+  const [target, setTarget] = useState<RedoTarget | null>(null);
+  const [attempts, setAttempts] = useState<Record<string, RedoResult[]>>({});
+
+  const saidNear = (t: number) =>
+    timeline
+      .filter((e) => e.type === "speech" && e.end >= t - NEARBY_MS && e.start <= t + NEARBY_MS)
+      .map((e) => (e.type === "speech" ? e.text : ""))
+      .join(" ");
+  // When a line first appeared in full in the editor.
+  const writtenAt = (quote: string) => {
+    const q = quote.trim();
+    return q ? codeHistory.find((s) => s.code.includes(q))?.t ?? null : null;
+  };
+
+  // One redo target per unexplained decision, placed at the moment its line was written.
+  const targets = useMemo(() => {
+    const out: Record<string, RedoTarget> = {};
+    for (const d of decisions) {
+      if (d.explained) continue;
+      const t = writtenAt(d.code_quote) ?? durationMs;
+      out[d.id] = {
+        key: d.id,
+        t,
+        description: d.description,
+        code_quote: d.code_quote,
+        code: snapshotAt(codeHistory, t),
+        firstSaid: saidNear(t) || d.said_quote,
+      };
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [decisions, codeHistory, timeline, durationMs]);
+
+  const moments: Moment[] = Object.values(targets)
+    .map((x) => ({ key: x.key, t: x.t, label: x.description }))
+    .sort((a, b) => a.t - b.t);
+
+  // "Redo from here": explain whatever was written in the 30s before the playhead.
+  const redoAt = (t: number) => {
+    const now = snapshotAt(codeHistory, t);
+    const before = new Set(snapshotAt(codeHistory, t - NEARBY_MS).split("\n").map((l) => l.trim()));
+    const added = now.split("\n").filter((l) => l.trim() && !before.has(l.trim()));
+    setTarget({
+      key: `at-${Math.round(t / 1000)}`,
+      t,
+      description: `What you were writing around ${clock(t)}, and why you wrote it that way`,
+      code_quote: added.join("\n"),
+      code: now,
+      firstSaid: saidNear(t),
+    });
+  };
+
+  // The report's missed explanation, matched to a decision when it quotes one.
+  const missedQuote = report?.missed_explanation?.evidence;
+  const missedKey =
+    missedQuote?.source === "wrote"
+      ? Object.values(targets).find((x) => x.code_quote.includes(missedQuote.quote.trim()) || missedQuote.quote.includes(x.code_quote.trim()))?.key
+      : undefined;
+  const redoMissed = () => {
+    if (missedKey) return setTarget(targets[missedKey]);
+    const t = (missedQuote?.source === "wrote" && writtenAt(missedQuote.quote)) || durationMs;
+    setTarget({
+      key: "missed",
+      t,
+      description: report!.missed_explanation.observation,
+      code_quote: missedQuote?.source === "wrote" ? missedQuote.quote : "",
+      code: snapshotAt(codeHistory, t),
+      firstSaid: saidNear(t),
+    });
+  };
+
+  const fixed = (id: string) => attempts[id]?.some((a) => a.explained);
+  const explained = decisions.filter((d) => d.explained || fixed(d.id)).length;
 
   return (
     <div className="report">
@@ -66,6 +152,7 @@ export default function ReportView(props: {
               <h3>Missed explanation</h3>
               <p>{report.missed_explanation?.observation}</p>
               <Quote ev={report.missed_explanation?.evidence} />
+              <button className="redo-btn" onClick={redoMissed}>↺ Redo this moment</button>
             </div>
             <div className="box retry">
               <h3>Try this next</h3>
@@ -74,6 +161,24 @@ export default function ReportView(props: {
             </div>
           </div>
 
+          </>
+      )}
+
+      <h2>Replay <span className="muted">— scrub through what you said and wrote, and redo the moments you skipped</span></h2>
+      <Replay
+        timeline={timeline}
+        codeHistory={codeHistory}
+        durationMs={durationMs}
+        audioUrl={props.audioUrl}
+        audioOffsetMs={props.audioOffsetMs}
+        moments={moments}
+        seek={seek}
+        onRedoMoment={(key) => setTarget(targets[key])}
+        onRedoAt={redoAt}
+      />
+
+      {report && (
+        <>
           <h2>Scores</h2>
           <div className="scores">
             {SCORE_LABELS.map(([key, label]) => {
@@ -118,14 +223,23 @@ export default function ReportView(props: {
       {decisions.length === 0 && <p className="muted">No decisions were recorded.</p>}
       <ul className="ledger">
         {decisions.map((d) => (
-          <li key={d.id} className={d.explained ? "pass" : "fail"}>
-            <span className="mark">{d.explained ? "✓" : "✗"}</span>
+          <li key={d.id} className={d.explained || fixed(d.id) ? "pass" : "fail"}>
+            <span className="mark">{d.explained || fixed(d.id) ? "✓" : "✗"}</span>
             <div>
               <div>{d.description} {d.code_quote && <code>{d.code_quote}</code>}</div>
               <div className="muted">
                 {d.explained ? "Explained: " : d.said_quote ? "Closest you came: " : "Never mentioned"}
                 {d.said_quote && <q>{d.said_quote}</q>}
               </div>
+              {fixed(d.id) && <div className="pass small">Explained on your retake</div>}
+              {targets[d.id] && (
+                <div className="row">
+                  <button className="link" onClick={() => setSeek({ t: targets[d.id].t - 3000, n: Date.now() })}>
+                    Jump to {clock(targets[d.id].t)}
+                  </button>
+                  <button onClick={() => setTarget(targets[d.id])}>↺ {attempts[d.id] ? "Redo again" : "Redo this moment"}</button>
+                </div>
+              )}
             </div>
           </li>
         ))}
@@ -133,6 +247,16 @@ export default function ReportView(props: {
 
       <h2>Final code {run && <span className="muted">— {run.error ? "did not run" : `${run.passed}/${run.total} tests passed`}</span>}</h2>
       <pre className="code">{code}</pre>
+
+      {target && (
+        <Redo
+          key={target.key}
+          target={target}
+          attempts={attempts[target.key] || []}
+          onResult={(r) => setAttempts((a) => ({ ...a, [target.key]: [...(a[target.key] || []), r] }))}
+          onClose={() => setTarget(null)}
+        />
+      )}
     </div>
   );
 }

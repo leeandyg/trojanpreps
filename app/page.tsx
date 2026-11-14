@@ -8,8 +8,9 @@ import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { useTTS } from "@/hooks/useTTS";
 import { usePyodide } from "@/hooks/usePyodide";
 import ReportView from "@/components/Report";
+import { demoSession } from "@/lib/demoSession";
 import type {
-  AvatarState, Decision, Grounding, InterviewerReply, Metrics, Mode, Report, RunResult, TimelineEvent, Trigger,
+  AvatarState, CodeSnapshot, Decision, Grounding, InterviewerReply, Metrics, Mode, Report, RunResult, TimelineEvent, Trigger,
 } from "@/lib/types";
 
 const SPEECH_SETTLE_MS = 1500; // quiet after an utterance before consulting the interviewer
@@ -42,6 +43,8 @@ export default function Page() {
   const [report, setReport] = useState<Report | null>(null);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [reportError, setReportError] = useState("");
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [durationMs, setDurationMs] = useState(0);
 
   // Refs mirror state so timers and async callbacks always see current values.
   const startRef = useRef(0);
@@ -51,7 +54,9 @@ export default function Page() {
   const decisionsRef = useRef<Decision[]>([]);
   const runRef = useRef<RunResult | null>(null);
   const hintRef = useRef(0);
-  const editTimesRef = useRef<number[]>([]);
+  const codeHistoryRef = useRef<CodeSnapshot[]>([{ t: 0, code: problem.starterCode }]);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const audioOffsetRef = useRef(0); // session time at which the mic recording began
   const busyRef = useRef(false);
   const pendingRef = useRef<Trigger | null>(null);
   const mutedRef = useRef(false);
@@ -76,10 +81,12 @@ export default function Page() {
 
   const say = useCallback(
     async (text: string, kind: string, g?: Grounding) => {
-      addEvent({ type: "interviewer", t: now(), text, kind, grounding: g });
+      const ev: TimelineEvent = { type: "interviewer", t: now(), text, kind, grounding: g };
+      addEvent(ev);
       mutedRef.current = true;
       setSpeaking(true);
-      await speak(text);
+      const url = await speak(text);
+      if (url) ev.audioUrl = url;
       setSpeaking(false);
       setTimeout(() => (mutedRef.current = false), 400); // let the echo die out
     },
@@ -184,7 +191,7 @@ export default function Page() {
     codeRef.current = next;
     setCode(next);
     if (phase !== "live") return;
-    editTimesRef.current.push(now());
+    codeHistoryRef.current.push({ t: now(), code: next });
     if (codeTimer.current) clearTimeout(codeTimer.current);
     codeTimer.current = setTimeout(function check() {
       if (modeRef.current !== "coach") return;
@@ -218,6 +225,22 @@ export default function Page() {
       ?.getUserMedia({ video: true })
       .then((stream) => videoRef.current && (videoRef.current.srcObject = stream))
       .catch(() => {});
+    // Record the mic for the whole session so the replay has audio.
+    navigator.mediaDevices
+      ?.getUserMedia({ audio: true })
+      .then((stream) => {
+        const rec = new MediaRecorder(stream);
+        const chunks: Blob[] = [];
+        rec.ondataavailable = (e) => chunks.push(e.data);
+        rec.onstop = () => {
+          stream.getTracks().forEach((t) => t.stop());
+          setAudioUrl(URL.createObjectURL(new Blob(chunks, { type: rec.mimeType })));
+        };
+        audioOffsetRef.current = now();
+        rec.start(1000);
+        recorderRef.current = rec;
+      })
+      .catch(() => {});
     stt.start();
     busyRef.current = true;
     await say(problem.intro, "intro");
@@ -232,8 +255,16 @@ export default function Page() {
     speechSynthesis.cancel();
     [speechTimer, codeTimer, talkTimer].forEach((t) => t.current && clearTimeout(t.current));
     (videoRef.current?.srcObject as MediaStream | null)?.getTracks().forEach((t) => t.stop());
-    const m = computeMetrics(timelineRef.current, editTimesRef.current, now());
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+    showReport(now());
+  };
+
+  // Computes metrics from the refs, switches to the report page, and asks for the written feedback.
+  const showReport = async (sessionMs: number) => {
+    const editTimes = codeHistoryRef.current.slice(1).map((s) => s.t);
+    const m = computeMetrics(timelineRef.current, editTimes, sessionMs);
     setMetrics(m);
+    setDurationMs(sessionMs);
     setPhase("report");
     try {
       const res = await fetch("/api/report", {
@@ -256,6 +287,22 @@ export default function Page() {
     }
   };
 
+  // /?demo loads a canned session straight into the report, to work on the replay without a mic.
+  useEffect(() => {
+    if (!new URLSearchParams(location.search).has("demo")) return;
+    timelineRef.current = demoSession.timeline;
+    codeHistoryRef.current = demoSession.codeHistory;
+    decisionsRef.current = demoSession.decisions;
+    runRef.current = demoSession.run;
+    codeRef.current = demoSession.codeHistory[demoSession.codeHistory.length - 1].code;
+    setTimeline(demoSession.timeline);
+    setDecisions(demoSession.decisions);
+    setRunResult(demoSession.run);
+    setCode(codeRef.current);
+    showReport(demoSession.durationMs);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (phase !== "live") return;
     const id = setInterval(() => setElapsed(now()), 1000);
@@ -276,6 +323,11 @@ export default function Page() {
         run={runResult}
         error={reportError}
         mode={mode}
+        timeline={timeline}
+        codeHistory={codeHistoryRef.current}
+        durationMs={durationMs}
+        audioUrl={audioUrl}
+        audioOffsetMs={audioOffsetRef.current}
       />
     );
   }

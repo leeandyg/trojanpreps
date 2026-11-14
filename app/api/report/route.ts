@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { chatJSON } from "@/lib/llm";
+import { chatJSON, REPORT_MODEL } from "@/lib/llm";
 import { REPORT_SYSTEM } from "@/lib/prompts";
 import { formatTimeline, numberLines } from "@/lib/format";
 import type { Evidence, Report, TimelineEvent } from "@/lib/types";
@@ -27,7 +27,7 @@ DELIVERY METRICS
 ${JSON.stringify(metrics)}`;
 
   try {
-    const report = await chatJSON<Report>(REPORT_SYSTEM, user, 0.2);
+    const report = await chatJSON<Report>(REPORT_SYSTEM, user, 0.2, REPORT_MODEL);
 
     // Check each quote really appears in what was said or written.
     const said = norm(
