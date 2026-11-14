@@ -10,7 +10,7 @@ export async function POST(req: Request) {
 
     if (provider === "elevenlabs" && key) {
       const voice = process.env.TTS_VOICE || "JBFqnCBsd6RMkjVDRZzb";
-      upstream = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice}`, {
+      upstream = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice}/stream`, {
         method: "POST",
         headers: { "xi-api-key": key || "", "Content-Type": "application/json" },
         body: JSON.stringify({ text, model_id: process.env.TTS_MODEL || "eleven_flash_v2_5" }),

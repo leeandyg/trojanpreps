@@ -7,6 +7,7 @@ import { computeMetrics } from "@/lib/metrics";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { useTTS } from "@/hooks/useTTS";
 import { usePyodide } from "@/hooks/usePyodide";
+import { watchVoice } from "@/hooks/voiceActivity";
 import ReportView from "@/components/Report";
 import { demoSession } from "@/lib/demoSession";
 import type {
@@ -14,6 +15,17 @@ import type {
 } from "@/lib/types";
 
 const SPEECH_SETTLE_MS = 1500; // quiet after an utterance before consulting the interviewer
+const QUESTION_SETTLE_MS = 600; // shorter wait when the utterance sounds like a direct question
+// Barge-in: the candidate talking over the interviewer cuts the interviewer off.
+const BARGE_RMS = 0.045; // mic loudness that counts as speech
+const BARGE_HOLD_MS = 250; // how long it must stay that loud
+const BARGE_GRACE_MS = 500; // ignore the mic right after the interviewer starts (echo canceller settling)
+// Backchannels: short acknowledgements played without a model call.
+const BACKCHANNELS = ["Mm-hm.", "Okay.", "Right.", "Got it."];
+const BACKCHANNEL_DELAY_MS = 700; // pause after a thought before acknowledging it
+const BACKCHANNEL_GAP_MS = 14000; // at most one this often
+const BACKCHANNEL_MIN_WORDS = 8;
+const BACKCHANNEL_VOLUME = 0.6;
 const CODE_SETTLE_MS = 4000; // no typing for this long before a code-triggered check
 const PROBE_COOLDOWN_MS = 25000; // minimum gap between unprompted probes
 
@@ -23,6 +35,10 @@ const STATE_LABEL: Record<AvatarState, string> = {
   thinking: "Thinking",
   speaking: "Speaking",
 };
+
+// Rough check for speech aimed at the interviewer, to answer sooner and to not "mm-hm" a question.
+const looksLikeQuestion = (text: string) =>
+  /\?|\b(can|could|should|would|may) (i|you|we|there|it)\b|\b(is|are|does|do|will) (it|there|the|this|that|we|i)\b|^(what|how|why|when|which|is|are|do|does)\b|\bhint\b/i.test(text.trim());
 
 const meaningfulLines = (code: string) =>
   code.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#") && l !== "pass");
@@ -63,6 +79,14 @@ export default function Page() {
   const talkingRef = useRef(false);
   const lastProbeRef = useRef(-PROBE_COOLDOWN_MS);
   const lastCheckedCodeRef = useRef(problem.starterCode);
+  const speakingRef = useRef(false);
+  const speakStartRef = useRef(0);
+  const currentLineRef = useRef<TimelineEvent | null>(null);
+  const stopVoiceWatchRef = useRef<(() => void) | null>(null);
+  const backchannelsRef = useRef<string[]>([]);
+  const backTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastBackRef = useRef(0);
+  const settleRef = useRef(SPEECH_SETTLE_MS);
   const speechTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const codeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const talkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -71,7 +95,7 @@ export default function Page() {
 
   modeRef.current = mode;
   const now = () => Date.now() - startRef.current;
-  const speak = useTTS();
+  const tts = useTTS();
   const py = usePyodide();
 
   const addEvent = useCallback((e: TimelineEvent) => {
@@ -83,15 +107,28 @@ export default function Page() {
     async (text: string, kind: string, g?: Grounding) => {
       const ev: TimelineEvent = { type: "interviewer", t: now(), text, kind, grounding: g };
       addEvent(ev);
+      currentLineRef.current = ev;
       mutedRef.current = true;
+      speakingRef.current = true;
+      speakStartRef.current = Date.now();
       setSpeaking(true);
-      const url = await speak(text);
+      const url = await tts.speak(text);
       if (url) ev.audioUrl = url;
+      speakingRef.current = false;
       setSpeaking(false);
-      setTimeout(() => (mutedRef.current = false), 400); // let the echo die out
+      // After a barge-in the mic is already live again; otherwise let the echo die out first.
+      if (!ev.interrupted) setTimeout(() => !speakingRef.current && (mutedRef.current = false), 400);
     },
-    [addEvent, speak]
+    [addEvent, tts]
   );
+
+  // The candidate started talking over the interviewer: stop and listen.
+  const bargeIn = useCallback(() => {
+    if (!speakingRef.current) return;
+    if (currentLineRef.current?.type === "interviewer") currentLineRef.current.interrupted = true;
+    mutedRef.current = false;
+    tts.stop();
+  }, [tts]);
 
   // Ask the interviewer model whether to say anything, given everything so far.
   const consult = useCallback(
@@ -158,8 +195,24 @@ export default function Page() {
   const onUtterance = useCallback(
     (text: string, start: number, end: number, isTyped = false) => {
       addEvent({ type: "speech", t: start, start, end, text, typed: isTyped || undefined });
+      const question = looksLikeQuestion(text);
+      settleRef.current = isTyped ? 0 : question ? QUESTION_SETTLE_MS : SPEECH_SETTLE_MS;
       if (speechTimer.current) clearTimeout(speechTimer.current);
-      speechTimer.current = setTimeout(() => consult("speech"), isTyped ? 0 : SPEECH_SETTLE_MS);
+      speechTimer.current = setTimeout(() => consult("speech"), settleRef.current);
+
+      // Acknowledge a finished thought with a quick "mm-hm", the way a person on a call would.
+      if (backTimer.current) clearTimeout(backTimer.current);
+      const clips = backchannelsRef.current;
+      const longEnough = text.split(/\s+/).length >= BACKCHANNEL_MIN_WORDS;
+      if (!isTyped && !question && longEnough && clips.length && Date.now() - lastBackRef.current > BACKCHANNEL_GAP_MS) {
+        backTimer.current = setTimeout(() => {
+          if (busyRef.current || speakingRef.current) return;
+          lastBackRef.current = Date.now();
+          const clip = new Audio(clips[Math.floor(Math.random() * clips.length)]);
+          clip.volume = BACKCHANNEL_VOLUME;
+          clip.play().catch(() => {});
+        }, BACKCHANNEL_DELAY_MS);
+      }
     },
     [addEvent, consult]
   );
@@ -173,6 +226,7 @@ export default function Page() {
           clearTimeout(speechTimer.current);
           speechTimer.current = setTimeout(() => consult("speech"), SPEECH_SETTLE_MS);
         }
+        if (backTimer.current) clearTimeout(backTimer.current);
         talkingRef.current = true;
         setCandidateTalking(true);
         if (talkTimer.current) clearTimeout(talkTimer.current);
@@ -227,8 +281,18 @@ export default function Page() {
       .catch(() => {});
     // Record the mic for the whole session so the replay has audio.
     navigator.mediaDevices
-      ?.getUserMedia({ audio: true })
+      ?.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
       .then((stream) => {
+        // Watch the mic for the candidate talking over the interviewer.
+        let loudMs = 0;
+        stopVoiceWatchRef.current = watchVoice(stream, (rms) => {
+          const listening = speakingRef.current && Date.now() - speakStartRef.current > BARGE_GRACE_MS;
+          loudMs = listening && rms > BARGE_RMS ? loudMs + 50 : 0;
+          if (loudMs >= BARGE_HOLD_MS) {
+            loudMs = 0;
+            bargeIn();
+          }
+        });
         const rec = new MediaRecorder(stream);
         const chunks: Blob[] = [];
         rec.ondataavailable = (e) => chunks.push(e.data);
@@ -245,6 +309,13 @@ export default function Page() {
     busyRef.current = true;
     await say(problem.intro, "intro");
     busyRef.current = false;
+    // Fetch the backchannel clips one at a time, after the intro, to stay under the voice provider's concurrency limit.
+    (async () => {
+      for (const phrase of BACKCHANNELS) {
+        const url = await tts.preload(phrase);
+        if (url) backchannelsRef.current.push(url);
+      }
+    })();
     const next = pendingRef.current;
     pendingRef.current = null;
     if (next) consult(next);
@@ -252,8 +323,9 @@ export default function Page() {
 
   const endSession = async () => {
     stt.stop();
-    speechSynthesis.cancel();
-    [speechTimer, codeTimer, talkTimer].forEach((t) => t.current && clearTimeout(t.current));
+    tts.stop();
+    stopVoiceWatchRef.current?.();
+    [speechTimer, codeTimer, talkTimer, backTimer].forEach((t) => t.current && clearTimeout(t.current));
     (videoRef.current?.srcObject as MediaStream | null)?.getTracks().forEach((t) => t.stop());
     if (recorderRef.current?.state === "recording") recorderRef.current.stop();
     showReport(now());

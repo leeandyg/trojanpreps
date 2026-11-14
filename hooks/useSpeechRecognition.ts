@@ -34,6 +34,7 @@ export function useSpeechRecognition(handlers: Handlers, mutedRef: React.RefObje
         setInterim("");
         return;
       }
+      h.current.onActivity();
       let pending = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const text = e.results[i][0].transcript.trim();
@@ -45,7 +46,6 @@ export function useSpeechRecognition(handlers: Handlers, mutedRef: React.RefObje
         } else pending += text + " ";
       }
       setInterim(pending.trim());
-      h.current.onActivity();
     };
     rec.onend = () => {
       if (activeRef.current) {

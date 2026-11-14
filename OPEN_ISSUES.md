@@ -24,6 +24,17 @@ The `/api/redo` grader and the report on `gemini-3.8-flash` were tested with sim
 - **Interviewer lines replaying** at the right moments, and at 1.5× and 2×.
 - **Redo recording**: the 45s countdown, and whether the last words arrive before grading (it waits 900ms after Stop).
 
+### Live-conversation features (streaming voice, barge-in, backchannels; untested in a browser)
+
+`/api/tts` streaming was measured from the terminal (first audio byte in about 0.35s). The rest needs ears:
+
+- **Streamed playback through `MediaSource`** in `useTTS`, and that the saved blob still replays.
+- **Barge-in threshold.** `BARGE_RMS = 0.045` is a guess. Too low and the interviewer cuts itself off on speakers or on keyboard noise; too high and you have to shout. Tune with real hardware.
+- **Barge-in on speakers.** Echo cancellation applies to the loudness watcher, but Chrome's speech recognizer captures the mic separately, so on speakers the transcript after a barge-in may start with the interviewer's own words. Headphones avoid this.
+- **Backchannel timing and frequency**, and whether an "mm-hm" on speakers gets transcribed as candidate speech.
+- **Backchannel right before a spoken reply.** A thought that draws a probe can get "mm-hm" and then the probe about a second later. May sound natural or may sound odd.
+- **Question detection** is a pattern match; it will miss some questions (they just get the normal 1.5s wait) and flag some statements.
+
 ## Known problems
 
 8. **Filler words are undercounted.** Chrome's recognizer usually drops "um" and "uh". The report states this. Possible fix: record the mic and re-transcribe at the end with a model prompted to keep disfluencies.

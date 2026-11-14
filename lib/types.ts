@@ -8,7 +8,7 @@ export type Grounding = { code_quote: string; said_quote: string };
 export type TimelineEvent =
   | { type: "speech"; t: number; start: number; end: number; text: string; typed?: boolean }
   // audioUrl is a browser blob URL of the spoken line, kept so the replay can play it back
-  | { type: "interviewer"; t: number; text: string; kind: string; grounding?: Grounding; audioUrl?: string }
+  | { type: "interviewer"; t: number; text: string; kind: string; grounding?: Grounding; audioUrl?: string; interrupted?: boolean }
   | { type: "run"; t: number; passed: number; total: number; summary: string };
 
 // The editor contents after each edit, for replay.

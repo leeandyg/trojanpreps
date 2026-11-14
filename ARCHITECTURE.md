@@ -79,7 +79,7 @@ Silence alone never triggers a call.
 
 | Trigger | When | Modes |
 |---|---|---|
-| `speech` | Candidate finished an utterance, then 1.5s of quiet | Both |
+| `speech` | Candidate finished an utterance, then 1.5s of quiet (0.6s if it sounds like a direct question) | Both |
 | `code` | At least 2 new meaningful lines since the last check, 4s with no typing, candidate not talking, probe cooldown elapsed | Coach |
 | `run` | Candidate clicked Run tests | Coach |
 | `wrapup` | Candidate clicked "I'm done" | Both |
@@ -87,6 +87,17 @@ Silence alone never triggers a call.
 The opening line is fixed text (`problem.intro`), not an LLM call.
 
 Only one consult runs at a time; a trigger that arrives meanwhile is queued (latest wins, `wrapup` is never displaced). The timing constants are at the top of [app/page.tsx](app/page.tsx).
+
+### Making the conversation feel live
+
+Still turn-based underneath (speech-to-text, then the model, then a voice), with four things layered on so it does not feel like it:
+
+- **Streaming voice.** `/api/tts` uses ElevenLabs' streaming endpoint and `useTTS` plays the audio as bytes arrive (through `MediaSource`), so the interviewer starts speaking after about 0.3s instead of after the whole clip downloads.
+- **Barge-in.** The mic's loudness is watched during the session ([hooks/voiceActivity.ts](hooks/voiceActivity.ts)) on a stream with echo cancellation. If the candidate talks over the interviewer (louder than `BARGE_RMS` for `BARGE_HOLD_MS`), the interviewer's audio stops at once, the mic is unmuted, and the line is marked `interrupted` so the model knows it was cut off.
+- **Backchannels.** Four short clips ("Mm-hm.", "Okay.", "Right.", "Got it.") are fetched once after the intro. After the candidate finishes a thought of 8 or more words that is not a question, one plays 0.7s later, at most every 14s. No model call is involved, and they are not logged in the transcript. They are skipped when the browser voice is in use.
+- **Faster answers to questions.** An utterance that looks like a direct question (a simple pattern check, `looksLikeQuestion`) waits 0.6s before consulting the model instead of 1.5s.
+
+Deliberately not built: starting the model call early on a partial transcript. It would cut latency further but spends tokens on calls that get thrown away.
 
 ### The decision ledger (the core mechanism)
 
@@ -103,7 +114,7 @@ The browser sends the ledger back on the next call. Probes may only target a dec
 - `probeAllowed` is computed client-side (Coach mode and cooldown elapsed, or wrap-up). A probe that comes back when it was not allowed is dropped.
 - A probe is dropped if the candidate started talking or anything new was logged while the model was deciding.
 - Interview mode never sends `code` or `run` triggers at all.
-- Mic results are discarded while the interviewer's audio is playing, plus 400ms, so it does not transcribe itself.
+- Mic results are discarded while the interviewer's audio is playing, plus 400ms, so it does not transcribe itself. A barge-in ends that immediately.
 
 ### Avatar states
 
@@ -167,13 +178,16 @@ The report page has a **replay**: a scrubbable timeline of the session where cod
 | [lib/format.ts](lib/format.ts) | Turns the timeline into the transcript the LLM reads; numbers code lines |
 | [lib/llm.ts](lib/llm.ts) | `chatJSON()`: one LLM call in JSON mode, with optional model override and fallback to the fast model |
 | [hooks/useSpeechRecognition.ts](hooks/useSpeechRecognition.ts) | Continuous Chrome speech-to-text with auto-restart and muting |
-| [hooks/useTTS.ts](hooks/useTTS.ts) | `speak(text)`, resolves when audio finishes and returns the audio blob URL for replay; falls back to browser voice |
+| [hooks/useTTS.ts](hooks/useTTS.ts) | `speak(text)` streams and plays a line, resolving when it finishes or is stopped, and returns the audio blob URL for replay; `stop()` cuts it off; `preload(text)` fetches a clip; falls back to browser voice |
+| [hooks/voiceActivity.ts](hooks/voiceActivity.ts) | Mic loudness watcher used for barge-in |
 | [hooks/usePyodide.ts](hooks/usePyodide.ts) | Loads Pyodide and runs the code against the tests |
 
 ## Common changes
 
 - **Interviewer too chatty, too quiet, or too generic:** edit [lib/prompts.ts](lib/prompts.ts). Avoid putting literal example sentences in the prompt; the model repeats them word for word. Describe the shape instead.
 - **Timing of probes:** `SPEECH_SETTLE_MS`, `CODE_SETTLE_MS`, `PROBE_COOLDOWN_MS` in [app/page.tsx](app/page.tsx).
+- **Interviewer cuts out when it shouldn't, or can't be interrupted:** `BARGE_RMS`, `BARGE_HOLD_MS`, `BARGE_GRACE_MS` in [app/page.tsx](app/page.tsx). Raise `BARGE_RMS` if it interrupts itself on speakers.
+- **Too many or too few "mm-hm"s:** the `BACKCHANNEL_*` constants in the same place.
 - **Different or additional problem:** add an object like the one in [lib/problem.ts](lib/problem.ts). The test harness in `usePyodide` assumes a `(nums, target)` signature and order-insensitive comparison, so it needs generalizing for other problems.
 - **Different LLM:** change the three `LLM_*` variables. The provider must support `response_format: { type: "json_object" }`.
 

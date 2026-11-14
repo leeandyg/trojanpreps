@@ -24,7 +24,7 @@ export function formatTimeline(events: TimelineEvent[]) {
       lines.push(`[${clock(e.start)}] CANDIDATE: ${e.text}`);
       lastSpeechEnd = e.end;
     } else if (e.type === "interviewer") {
-      lines.push(`[${clock(e.t)}] INTERVIEWER (${e.kind}): ${e.text}`);
+      lines.push(`[${clock(e.t)}] INTERVIEWER (${e.kind}): ${e.text}${e.interrupted ? " (the candidate cut in before you finished)" : ""}`);
     } else {
       lines.push(`[${clock(e.t)}] (candidate ran the code: ${e.summary})`);
     }
