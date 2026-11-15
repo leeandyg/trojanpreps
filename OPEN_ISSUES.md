@@ -6,7 +6,7 @@ Context for the design is in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 The API routes were tested with simulated requests against the real Gemini and ElevenLabs services and behaved as intended. Nothing below has been exercised in a real browser session:
 
-1. **Microphone transcription** end to end (Chrome Web Speech API, auto-restart, utterance timing).
+1. **Microphone transcription.** Deepgram streaming was confirmed working in a browser by Andy on 2026-11-14 (on the earlier Nova-3 version). It has since been switched to Deepgram Flux (`/v2/listen`, turn events), which was only exercised from Node with a WebM file and token auth: Chrome's `MediaRecorder` into Flux, timestamp-based muting, barge-in, reconnect and the Chrome fallback still need a browser run. A key with the default role transcribes but cannot mint tokens (`FORBIDDEN`), which silently means Chrome; use a Member key.
 2. **Audio playback** of the ElevenLabs voice in the page, and the browser-voice fallback.
 3. **Echo suppression.** Mic results are dropped while the interviewer speaks plus 400ms. With speakers instead of headphones, the tail of the interviewer's voice may still land in the transcript as candidate speech.
 4. **Pyodide runner** and the Run tests button.
@@ -20,7 +20,7 @@ The `/api/redo` grader and the report on `gemini-3.8-flash` were tested with sim
 
 - **Replay timeline rendering and seeking**, including lane alignment and the playhead. `/?demo` loads a canned session to check this without a mic.
 - **Session audio recording and synced playback.** Chrome reports recorded audio as endless until it is seeked once; there is a workaround in `Replay.tsx` that needs checking. Audio and the replay clock may drift on long sessions.
-- **Mic recording alongside speech recognition.** Both use the mic at once; this normally works in Chrome but is unconfirmed here.
+- **Mic recording alongside speech recognition.** Three things open the mic now (session recording, barge-in watcher, Deepgram stream); this normally works in Chrome but is unconfirmed here.
 - **Interviewer lines replaying** at the right moments, and at 1.5× and 2×.
 - **Redo recording**: the 45s countdown, and whether the last words arrive before grading (it waits 900ms after Stop).
 
@@ -30,10 +30,17 @@ The `/api/redo` grader and the report on `gemini-3.8-flash` were tested with sim
 
 - **Streamed playback through `MediaSource`** in `useTTS`, and that the saved blob still replays.
 - **Barge-in threshold.** `BARGE_RMS = 0.045` is a guess. Too low and the interviewer cuts itself off on speakers or on keyboard noise; too high and you have to shout. Tune with real hardware.
-- **Speech recognition accuracy is the main remaining problem**, especially computer-science terms. Chrome's recognizer cannot be given a vocabulary in its default (cloud) mode. Options are written up in the team chat and summarized under "Not built".
-- **Barge-in on speakers.** Echo cancellation applies to the loudness watcher, but Chrome's speech recognizer captures the mic separately, so on speakers the transcript after a barge-in may start with the interviewer's own words. Headphones avoid this.
-- **Backchannel timing and frequency**, and whether an "mm-hm" on speakers gets transcribed as candidate speech.
-- **Backchannel right before a spoken reply.** A thought that draws a probe can get "mm-hm" and then the probe about a second later. May sound natural or may sound odd.
+- **Speech recognition accuracy** was the main remaining problem with Chrome. Switched to Deepgram (now the Flux model) with a keyterm list (`KEYTERMS` in `hooks/useSpeechRecognition.ts`); whether it actually does better on CS terms is not yet checked.
+- **Barge-in on speakers.** The Deepgram stream now uses an echo-cancelled mic, and on a barge-in only the last 1.5s of muted audio is kept, so the interviewer's own words should rarely leak in. Still true on the Chrome fallback.
+- **Backchannel timing and frequency**, and whether a backchannel on speakers gets transcribed as candidate speech.
+- **Backchannel right before a spoken reply.** A thought that draws a probe can get "okay" and then the probe about a second later. May sound natural or may sound odd.
+- **Taking the turn after a statement** (2026-11-14). Checked with simulated requests: a finished statement gets a short reply in both modes, narration while typing gets silence. It relies on a server-side second ask (see ARCHITECTURE "When the candidate hands over the floor"), which adds about a second in that case. Needs listening to: too chatty? too slow? In Interview mode the acknowledgement can lean towards agreement ("that makes sense").
+- **End-of-turn detection** (Deepgram Flux, `eot_threshold` 0.75, `eot_timeout_ms` 4000, then `TURN_SETTLE_MS` 300). Untested on think-aloud speech: may end turns too early on a mid-thought pause or wait the full 4s on a trailing sentence.
+- **New interviewer behaviours, all untested in a browser:** thinking sounds (how "Hmm." sounds, and that the reply follows cleanly), the backchannel after a silent reply, the session clock and lobby length buttons, time checks at 5 and 2 minutes left, time-up wrap-up, coach check-ins every 60s without contact, cutting in (5s wait, 2s barge-in grace), the closing question and sign-off.
+- **Dead-end redirect names the problem too directly.** In simulation the coach said why the approach fails rather than only asking a question that exposes it. Prompt tuning in `lib/prompts.ts`.
+- **Check-ins cost a model call a minute** in Coach mode while nothing else is happening.
+- **Pace and pause tiles on the report** (math checked on synthetic timings; never seen rendered). The row holds one to four tiles and may look sparse.
+- **Coach remarks are not rate-limited in the browser**; if it over-praises, add a guard or tighten the prompt.
 - **Question detection** is a pattern match; it will miss some questions (they just get the normal 1.5s wait) and flag some statements.
 
 ### Fixed after a code audit (2026-11-14), still to be confirmed by ear
@@ -53,7 +60,7 @@ These were found by reading the code after the live voice felt inconsistent, and
 
 ## Known problems
 
-8. **Filler words are undercounted.** Chrome's recognizer usually drops "um" and "uh". The report states this. Possible fix: record the mic and re-transcribe at the end with a model prompted to keep disfluencies.
+8. **Filler words were undercounted** with Chrome, which drops "um" and "uh". Deepgram is now asked to keep them (`filler_words=true`), so counts should be accurate unless the Chrome fallback is in use. The report's wording about undercounting may now be out of date; check after a real session.
 9. **"like" and "actually" are counted as fillers even when used normally**, so the count can also be inflated for those words.
 10. **An infinite loop in the candidate's code freezes the tab.** Pyodide runs on the main thread with no timeout. Fix: run it in a Web Worker and terminate on timeout.
 11. **First hint gives away too much.** The level-1 nudge already mentions "data structure" and "constant time". Needs prompt tuning in `lib/prompts.ts`, or a stronger model.
@@ -71,8 +78,6 @@ These were found by reading the code after the live voice felt inconsistent, and
 - **`/?demo` calls the report API on every load** (twice in development).
 
 ## Not built
-
-- **A better speech recognizer.** Leading option: Deepgram Nova-3 streaming with a keyword list (vocabulary biasing, keeps "um"/"uh", word timings; free signup credit). Zero-cost options: Gemini's live transcription model on the existing key, or Chrome's on-device mode with a phrase list (Chrome 140+). None have been tested by us. It would replace `hooks/useSpeechRecognition.ts` behind the same interface.
 
 18. **Only one problem and one language.** The test harness assumes Two Sum's signature (see "Common changes" in the architecture doc).
 19. **No session persistence.** Refreshing the page loses the session and the report.

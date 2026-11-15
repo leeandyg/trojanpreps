@@ -63,6 +63,8 @@ q { font-style: italic; }
 .modes.big { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 18px 0; }
 .modes.big button { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 12px; }
 .modes.big small { opacity: .8; }
+.modes.length { align-items: center; justify-content: center; gap: 6px; margin-bottom: 16px; }
+.modes.length span { margin-right: 4px; }
 
 .report { max-width: 900px; margin: 0 auto; padding: 24px 20px 60px; }
 .report header { display: flex; align-items: baseline; gap: 14px; }

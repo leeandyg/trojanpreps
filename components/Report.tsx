@@ -27,6 +27,13 @@ function Quote({ ev }: { ev?: Evidence }) {
   );
 }
 
+// Whether the candidate's pace changed between the two halves of the session.
+function paceTrend(early: number, late: number) {
+  if (late - early > 15) return "you sped up";
+  if (early - late > 15) return "you slowed down";
+  return "steady";
+}
+
 function paceNote(wpm: number) {
   if (!wpm) return "not enough speech";
   if (wpm < 110) return "slow";
@@ -216,8 +223,34 @@ export default function ReportView(props: {
         </div>
         <div><b>{m.longestSilentCodingSeconds}s</b><span>longest silent coding stretch</span></div>
       </div>
+      {m.midSentencePauses !== null && (
+        <div className="stats" style={{ marginTop: 12 }}>
+          <div>
+            <b>{m.midSentencePauses}</b>
+            <span>pauses of 1.5s+ mid-sentence{m.midSentencePauses > 0 && ` (longest ${m.longestPauseSeconds}s)`}</span>
+          </div>
+          {m.paceSlowest && m.paceFastest && (
+            <div>
+              <b>{m.paceSlowest.wpm}–{m.paceFastest.wpm}</b>
+              <span>wpm range: slowest at {clock(m.paceSlowest.t)}, fastest at {clock(m.paceFastest.t)}</span>
+            </div>
+          )}
+          {m.paceEarlyWpm !== null && m.paceLateWpm !== null && (
+            <div>
+              <b>{m.paceEarlyWpm} → {m.paceLateWpm}</b>
+              <span>wpm, first half to second half ({paceTrend(m.paceEarlyWpm, m.paceLateWpm)})</span>
+            </div>
+          )}
+          {m.fillerHotspot && (
+            <div>
+              <b>{m.fillerHotspot.count}</b>
+              <span>fillers in 30s around {clock(m.fillerHotspot.t)}, your densest stretch</span>
+            </div>
+          )}
+        </div>
+      )}
       {report?.delivery && <p>{report.delivery}</p>}
-      <p className="muted small">Speech recognition tends to drop "um" and "uh", so the filler count is a lower bound.</p>
+      <p className="muted small">Counts "um" and "uh" as transcribed. If the session fell back to Chrome speech recognition, these are mostly dropped and the count is a lower bound.</p>
 
       <h2>Decisions in your code {decisions.length > 0 && <span className="muted">— {explained} of {decisions.length} explained out loud</span>}</h2>
       {decisions.length === 0 && <p className="muted">No decisions were recorded.</p>}

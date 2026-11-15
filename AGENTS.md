@@ -24,8 +24,8 @@ An **MVP** of a voice-driven mock technical interview web app, built for the AI@
 ## Rules
 
 - **Stay in scope.** Do not add problems, languages, persistence, or features beyond the request. Suggest them instead.
-- **Ask before adding dependencies.** Current stack: Next.js, React, Monaco, `openai` SDK, Pyodide (CDN). Anything new needs a reason.
-- **Keys stay on the server.** All LLM and TTS calls go through `app/api/*`. Never read `LLM_*` or `TTS_*` env vars in client code. Never commit `.env.local`.
+- **Ask before adding dependencies.** Current stack: Next.js, React, Monaco, `openai` SDK, Pyodide (CDN), Deepgram (raw WebSocket, no SDK). Anything new needs a reason.
+- **Keys stay on the server.** All LLM and TTS calls go through `app/api/*`. Never read `LLM_*`, `TTS_*` or `STT_*` env vars in client code. Never commit `.env.local`.
 - **Server is stateless.** The browser holds session state and sends it on every call. Keep it that way.
 - **Guard rails live in the browser** (`probeAllowed`, dropping stale probes, mic muting). Do not move them into the prompt.
 - **Interviewer behavior is tuned in [lib/prompts.ts](lib/prompts.ts).** Describe the shape of a good reply; do not put literal example sentences in prompts, the model repeats them.

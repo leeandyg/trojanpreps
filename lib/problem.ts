@@ -19,7 +19,7 @@ export const problem = {
   ] as [number[], number, number[]][],
 
   intro:
-    "Hi, thanks for joining. The problem is on your left. Given an array of integers and a target, return the indices of the two numbers that add up to the target. Take a moment to read it, ask me anything you want clarified, and talk me through your thinking as you work.",
+    "Hi, thanks for joining, it's good to meet you. We'll work through one problem together, and I'm mostly interested in how you think, so there's no need to rush. The problem is on your left: given an array of integers and a target, return the indices of the two numbers that add up to the target. Take a moment to read it, and talk me through your thinking as you go. Anything you want to ask before you start?",
 
   // Only the interviewer sees this. The statement is deliberately underspecified
   // so the candidate has something to clarify.

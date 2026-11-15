@@ -11,11 +11,12 @@ import { watchVoice } from "@/hooks/voiceActivity";
 import ReportView from "@/components/Report";
 import { demoSession } from "@/lib/demoSession";
 import type {
-  AvatarState, CodeSnapshot, Decision, Grounding, InterviewerReply, Metrics, Mode, Report, RunResult, TimelineEvent, Trigger,
+  AvatarState, CodeSnapshot, Decision, Grounding, InterviewerReply, Metrics, Mode, Report, RunResult, SpokenWord, TimelineEvent, Trigger,
 } from "@/lib/types";
 
 const SPEECH_SETTLE_MS = 1500; // quiet after an utterance before consulting the interviewer
 const QUESTION_SETTLE_MS = 600; // shorter wait when the utterance sounds like a direct question
+const TURN_SETTLE_MS = 300; // wait when the recognizer itself says the turn is over (Deepgram); it has already judged the pause
 // Barge-in: the candidate talking over the interviewer cuts the interviewer off.
 const BARGE_RMS = 0.045; // mic loudness that counts as speech
 const BARGE_HOLD_MS = 250; // how long it must stay that loud
@@ -23,18 +24,34 @@ const BARGE_GRACE_MS = 500; // ignore the mic right after the interviewer's audi
 const BARGE_CONFIRM_MS = 1800; // if no words are heard this long after a barge-in, it was noise: say the line again
 const CONSULT_TIMEOUT_MS = 15000; // give up on an interviewer model call after this long
 const SORRY_LINE = "Sorry, I lost you for a second. Could you say that again?";
-// Backchannels: short acknowledgements played without a model call.
-const BACKCHANNELS = ["Mm-hm.", "Okay.", "Right.", "Got it."];
-const BACKCHANNEL_DELAY_MS = 700; // pause after a thought before acknowledging it
-const BACKCHANNEL_GAP_MS = 14000; // at most one this often
-const BACKCHANNEL_MIN_WORDS = 8;
-const BACKCHANNEL_VOLUME = 0.6;
+// Backchannels: short acknowledgements with no model call of their own. One plays when the
+// interviewer model decides a finished thought needs no reply.
+// Neutral on purpose: nothing that sounds like agreement ("right") when the reasoning may be wrong.
+const BACKCHANNELS = ["Okay.", "I see."];
+const BACKCHANNEL_GAP_MS = 35000; // at most one this often
+const BACKCHANNEL_MIN_WORDS = 15;
+const BACKCHANNEL_VOLUME = 0.6; // also used for the thinking sounds
+// Thinking sounds: fill the silence when the candidate is waiting on a reply and the model is slow.
+const THINKING_CLIPS = ["Hmm.", "Let's see."];
+const THINKING_AFTER_MS = 1200; // only if the model has not replied by then
+const THINKING_GAP_MS = 30000; // at most one this often
+// Session clock.
+const SESSION_MINUTES = [5, 10, 20]; // lengths offered in the lobby
+const DEFAULT_MINUTES = 10;
+const TIME_CHECKS_MIN = [5, 2]; // minutes remaining at which the interviewer mentions the time (skipped if over 70% of the session)
+const timeLine = (m: number) => (m > 0 ? `Just a heads up, we have about ${m} minute${m === 1 ? "" : "s"} left.` : "That's time, so let's stop there."); // used when the model call fails
+// Check-ins (Coach): with no interviewer contact for this long, ask the model whether the candidate is stuck.
+const CHECKIN_MS = 60000;
+const CHECKIN_TICK_MS = 5000;
+// Cutting in (time checks and check-ins): wait for a breath, then speak with a longer barge-in grace.
+const INTERRUPT_WAIT_MS = 5000; // how long to wait for the candidate to stop talking before speaking anyway
+const INTERRUPT_GRACE_MS = 2000; // the candidate's trailing words do not cut the interviewer off during this
 const CODE_SETTLE_MS = 4000; // no typing for this long before a code-triggered check
 const PROBE_COOLDOWN_MS = 25000; // minimum gap between unprompted probes
 const MAX_FOLLOWUPS = 2; // follow-up questions on one answer before the interviewer moves on
 // The recognizer cuts speech into pieces at small pauses. Pieces closer than this are shown as one block.
 const MERGE_GAP_MS = 2500;
-const QUESTION_KINDS = ["probe", "followup", "wrapup"]; // interviewer lines that expect an answer
+const QUESTION_KINDS = ["probe", "followup", "wrapup", "closing"]; // interviewer lines that expect an answer
 
 const STATE_LABEL: Record<AvatarState, string> = {
   listening: "Listening",
@@ -43,7 +60,7 @@ const STATE_LABEL: Record<AvatarState, string> = {
   speaking: "Speaking",
 };
 
-// Rough check for speech aimed at the interviewer, to answer sooner and to not "mm-hm" a question.
+// Rough check for speech aimed at the interviewer, to answer sooner and to not backchannel a question.
 const looksLikeQuestion = (text: string) =>
   /\?|\b(can|could|should|would|may) (i|you|we|there|it)\b|\b(is|are|does|do|will) (it|there|the|this|that|we|i)\b|^(what|how|why|when|which|is|are|do|does)\b|\bhint\b/i.test(text.trim());
 
@@ -62,6 +79,7 @@ export default function Page() {
   const [speaking, setSpeaking] = useState(false);
   const [candidateTalking, setCandidateTalking] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [limitMin, setLimitMin] = useState(DEFAULT_MINUTES);
   const [typed, setTyped] = useState("");
   const [report, setReport] = useState<Report | null>(null);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
@@ -90,9 +108,20 @@ export default function Page() {
   const speakStartRef = useRef(0);
   const currentLineRef = useRef<TimelineEvent | null>(null);
   const stopVoiceWatchRef = useRef<(() => void) | null>(null);
+  const graceRef = useRef(BARGE_GRACE_MS); // barge-in grace for the line being spoken
   const backchannelsRef = useRef<string[]>([]);
-  const backTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const thinkingRef = useRef<string[]>([]);
   const lastBackRef = useRef(0);
+  const lastThinkRef = useRef(0);
+  const lastClipRef = useRef(0); // when any short clip (backchannel or thinking sound) last played
+  const lastUtteranceRef = useRef({ text: "", typed: false }); // the candidate's latest speech block
+  const wordsRef = useRef<SpokenWord[][]>([]); // word timings per turn, in session ms, for the metrics
+  const turnsRef = useRef(false); // the recognizer detects end of turn itself
+  const limitRef = useRef(DEFAULT_MINUTES * 60000);
+  const wrapAskedRef = useRef(false);
+  const lastContactRef = useRef(0); // when the interviewer was last consulted or last spoke
+  const timeTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const checkinTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const settleRef = useRef(SPEECH_SETTLE_MS);
   const endedRef = useRef(false); // session over: nothing may speak or consult any more
   const newSpeechRef = useRef(false); // the candidate has said something the model has not seen yet
@@ -118,9 +147,10 @@ export default function Page() {
 
   // Speaks a line that is already in the timeline.
   const voice = useCallback(
-    async (ev: TimelineEvent & { type: "interviewer" }) => {
+    async (ev: TimelineEvent & { type: "interviewer" }, grace = BARGE_GRACE_MS) => {
       if (endedRef.current) return;
       currentLineRef.current = ev;
+      graceRef.current = grace;
       if (unmuteTimer.current) clearTimeout(unmuteTimer.current);
       speakingRef.current = true;
       speakStartRef.current = Infinity; // no barge-in until sound is actually playing
@@ -133,6 +163,7 @@ export default function Page() {
       if (url) ev.audioUrl = url;
       speakingRef.current = false;
       setSpeaking(false);
+      lastContactRef.current = Date.now();
       // After a barge-in the mic is already live again; otherwise let the echo die out first.
       if (!ev.interrupted) unmuteTimer.current = setTimeout(() => (mutedRef.current = false), 400);
     },
@@ -140,28 +171,53 @@ export default function Page() {
   );
 
   const say = useCallback(
-    async (text: string, kind: string, g?: Grounding) => {
+    async (text: string, kind: string, g?: Grounding, grace?: number) => {
       if (endedRef.current) return;
       const ev = { type: "interviewer" as const, t: now(), text, kind, grounding: g };
       addEvent(ev);
-      await voice(ev);
+      await voice(ev, grace);
     },
     [addEvent, voice]
   );
+
+  // Plays a short pre-fetched clip (backchannel or thinking sound). Resolves when it has finished.
+  const playClip = (clips: string[]) => {
+    lastClipRef.current = Date.now();
+    const clip = new Audio(clips[Math.floor(Math.random() * clips.length)]);
+    clip.volume = BACKCHANNEL_VOLUME;
+    return new Promise<void>((done) => {
+      clip.onended = clip.onerror = () => done();
+      clip.play().catch(() => done());
+      setTimeout(done, 3000);
+    });
+  };
+
+  // Before cutting in, give the candidate a moment to finish the sentence they are in.
+  const waitForGap = async () => {
+    const until = Date.now() + INTERRUPT_WAIT_MS;
+    while (talkingRef.current && Date.now() < until && !endedRef.current) await new Promise((r) => setTimeout(r, 150));
+  };
 
   // Ask the interviewer model whether to say anything, given everything so far.
   const consult = useCallback(
     async (trigger: Trigger) => {
       if (endedRef.current) return;
+      if (trigger === "wrapup") wrapAskedRef.current = true;
+      if (trigger === "checkin" && modeRef.current !== "coach") return;
       if (busyRef.current) {
-        if (pendingRef.current !== "wrapup") pendingRef.current = trigger;
+        // Queue it: the latest wins, except that a wrap-up beats a time check, which beats the rest.
+        const rank = (t: Trigger | null) => (t === "wrapup" ? 2 : t === "time" ? 1 : 0);
+        if (rank(trigger) >= rank(pendingRef.current)) pendingRef.current = trigger;
         return;
       }
       // A speech consult with nothing new to hear would just make the interviewer repeat itself.
       if (trigger === "speech" && !newSpeechRef.current) return;
       newSpeechRef.current = false;
       busyRef.current = true;
+      lastContactRef.current = Date.now();
       setThinking(true);
+      const minutesLeft = Math.max(0, Math.round((limitRef.current - now()) / 60000));
+      const cutIn = trigger === "time" || trigger === "checkin"; // the interviewer speaks up unasked
       const sentSeq = speechSeqRef.current;
       const sentTime = Date.now();
       const probeAllowed =
@@ -184,6 +240,9 @@ export default function Page() {
         followups++;
       }
       const followupsLeft = Math.max(0, MAX_FOLLOWUPS - followups);
+      // Where the session is: still working, in the wrap-up question's thread, or after the closing question.
+      const asked = (k: string) => tl.some((e) => e.type === "interviewer" && e.kind === k);
+      const stage = asked("closing") ? "closing" : asked("wrapup") ? "wrapup" : "working";
       const sentCode = codeRef.current;
       const body = JSON.stringify({
         mode: modeRef.current,
@@ -196,7 +255,22 @@ export default function Page() {
         probeAllowed,
         answering,
         followupsLeft,
+        // Typing right after talking means they are working, not handing the floor over.
+        secondsSinceEdit: Math.round((now() - codeHistoryRef.current[codeHistoryRef.current.length - 1].t) / 1000),
+        minutesLeft,
+        stage,
+        elapsedMs: now(),
       });
+      // The candidate is waiting on an answer: if the model is slow, make a small thinking sound.
+      const think = { timer: null as ReturnType<typeof setTimeout> | null, done: null as Promise<void> | null };
+      const awaited = trigger === "speech" && (answering || looksLikeQuestion(lastUtteranceRef.current.text));
+      if (awaited && thinkingRef.current.length && Date.now() - lastThinkRef.current > THINKING_GAP_MS) {
+        think.timer = setTimeout(() => {
+          if (endedRef.current || talkingRef.current || speakingRef.current) return;
+          lastThinkRef.current = Date.now();
+          think.done = playClip(thinkingRef.current);
+        }, THINKING_AFTER_MS);
+      }
       const ask = async (): Promise<InterviewerReply> => {
         const res = await fetch("/api/interviewer", {
           method: "POST",
@@ -211,9 +285,10 @@ export default function Page() {
       try {
         // The candidate is waiting on speech and wrap-up consults, so those get one retry.
         const reply = await ask().catch((e) => {
-          if (trigger === "code" || trigger === "run") throw e;
+          if (trigger === "code" || trigger === "run" || trigger === "checkin") throw e;
           return ask();
         });
+        if (think.timer) clearTimeout(think.timer);
         setThinking(false);
         if (endedRef.current) return;
 
@@ -221,32 +296,58 @@ export default function Page() {
         setDecisions(reply.decisions);
 
         // A question asked in reply to an answer is a follow-up, whatever the model called it.
-        let kind = reply.kind;
-        if (answering && kind === "probe") kind = "followup";
-        if (!answering && (kind === "followup" || kind === "ack")) kind = "other";
+        let kind: string = reply.kind;
+        if (trigger === "time") kind = "time";
+        else if (trigger === "checkin") kind = "redirect";
+        else if (answering && kind === "probe") kind = "followup";
+        else if (!answering && (kind === "followup" || kind === "ack")) kind = "other";
         const allowed =
-          kind === "probe" ? probeAllowed : kind === "followup" ? followupsLeft > 0 : true;
+          kind === "probe" ? probeAllowed
+          : kind === "followup" ? followupsLeft > 0
+          : kind === "closing" ? stage === "wrapup" && answering // asked once, after the wrap-up answer
+          : true;
         // The candidate kept talking while we were deciding. Speaking now would cut across
         // them, and the reply is based on half of what they said. Their new speech has
-        // already queued another consult, so drop this one.
-        const stale = trigger !== "wrapup" && (lastActivityRef.current > sentTime || speechSeqRef.current !== sentSeq);
-        if (reply.action === "speak" && allowed && !stale) {
+        // already queued another consult, so drop this one. Time checks and check-ins are
+        // meant to cut in, so they are kept.
+        const stale = trigger !== "wrapup" && !cutIn && (lastActivityRef.current > sentTime || speechSeqRef.current !== sentSeq);
+        let text = reply.action === "speak" && allowed && !stale ? reply.say : "";
+        if (trigger === "time" && !text) text = timeLine(minutesLeft); // a time check is never skipped
+        if (text) {
           hintRef.current = Math.max(hintRef.current, reply.hint_level);
           const g = reply.grounding?.code_quote || reply.grounding?.said_quote ? reply.grounding : undefined;
           if (kind === "probe" || kind === "followup" || kind === "wrapup") {
             lastProbeRef.current = now();
             setGrounding(g || null);
           }
-          await say(reply.say, kind, g);
+          if (think.done) await think.done; // don't talk over our own "hmm"
+          if (cutIn) await waitForGap();
+          await say(text, kind, g, cutIn ? INTERRUPT_GRACE_MS : undefined);
+        } else if (trigger === "speech" && !stale && !think.done) {
+          // Nothing to say to a finished thought: acknowledge it with a quick "okay", the way a person on a call would.
+          const last = lastUtteranceRef.current;
+          const longEnough = last.text.split(/\s+/).length >= BACKCHANNEL_MIN_WORDS;
+          const due = Date.now() - lastBackRef.current > BACKCHANNEL_GAP_MS;
+          if (!last.typed && !looksLikeQuestion(last.text) && longEnough && due && backchannelsRef.current.length && !talkingRef.current && !speakingRef.current) {
+            lastBackRef.current = Date.now();
+            playClip(backchannelsRef.current);
+          }
         }
         // Only count this code as looked at when the look could have led to a probe;
         // otherwise a passing "okay" would use up the candidate's new lines unseen.
         if (!stale && (trigger === "code" || kind === "probe")) lastCheckedCodeRef.current = sentCode;
       } catch (e) {
         console.error(e);
+        if (think.timer) clearTimeout(think.timer);
         setThinking(false);
+        if (think.done) await think.done;
+        if (trigger === "time" || (trigger === "wrapup" && minutesLeft === 0)) {
+          // The clock does not depend on the model: say the time anyway.
+          await waitForGap();
+          await say(timeLine(minutesLeft), trigger === "time" ? "time" : "other", undefined, INTERRUPT_GRACE_MS);
+        }
         // Don't leave an answer hanging in silence when the model call failed twice.
-        if (answering && lastLine?.type === "interviewer") await say(SORRY_LINE, lastLine.kind);
+        else if (answering && lastLine?.type === "interviewer") await say(SORRY_LINE, lastLine.kind);
       } finally {
         busyRef.current = false;
         const next = pendingRef.current;
@@ -254,6 +355,7 @@ export default function Page() {
         if (next) consult(next);
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [say]
   );
 
@@ -269,7 +371,7 @@ export default function Page() {
   };
 
   const onUtterance = useCallback(
-    (text: string, start: number, end: number, isTyped = false) => {
+    (text: string, start: number, end: number, isTyped = false, endOfTurn = false) => {
       if (endedRef.current) return;
       newSpeechRef.current = true;
       speechSeqRef.current++;
@@ -284,23 +386,10 @@ export default function Page() {
       } else {
         addEvent({ type: "speech", t: start, start, end, text, typed: isTyped || undefined });
       }
-      const question = looksLikeQuestion(text);
-      settleRef.current = isTyped ? 0 : question ? QUESTION_SETTLE_MS : SPEECH_SETTLE_MS;
+      lastUtteranceRef.current = { text, typed: isTyped };
+      // The recognizer's own end-of-turn call has already weighed the pause, so consult almost at once.
+      settleRef.current = isTyped ? 0 : endOfTurn ? TURN_SETTLE_MS : looksLikeQuestion(text) ? QUESTION_SETTLE_MS : SPEECH_SETTLE_MS;
       armSpeechTimer(settleRef.current);
-
-      // Acknowledge a finished thought with a quick "mm-hm", the way a person on a call would.
-      if (backTimer.current) clearTimeout(backTimer.current);
-      const clips = backchannelsRef.current;
-      const longEnough = text.split(/\s+/).length >= BACKCHANNEL_MIN_WORDS;
-      if (!isTyped && !question && longEnough && clips.length && Date.now() - lastBackRef.current > BACKCHANNEL_GAP_MS) {
-        backTimer.current = setTimeout(() => {
-          if (busyRef.current || speakingRef.current) return;
-          lastBackRef.current = Date.now();
-          const clip = new Audio(clips[Math.floor(Math.random() * clips.length)]);
-          clip.volume = BACKCHANNEL_VOLUME;
-          clip.play().catch(() => {});
-        }, BACKCHANNEL_DELAY_MS);
-      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [addEvent, consult]
@@ -308,15 +397,23 @@ export default function Page() {
 
   const stt = useSpeechRecognition(
     {
-      onFinal: (text, s, e) => {
-        // On speakers the mic can pick up our own "mm-hm"; that is not the candidate.
-        const echo = Date.now() - lastBackRef.current < 2500 && /^(m+-?h+m+|okay|ok|right|got it)[.!]?$/i.test(text.trim());
-        if (!echo) onUtterance(text, s - startRef.current, e - startRef.current);
+      onFinal: (text, s, e, info) => {
+        // On speakers the mic can pick up our own backchannel or thinking sound; that is not the candidate.
+        const echo = Date.now() - lastClipRef.current < 2500 && /^(okay|ok|i see|h+m+|let'?s see)[.!,]?$/i.test(text.trim());
+        if (echo) return;
+        const t0 = startRef.current;
+        if (info?.words.length) wordsRef.current.push(info.words.map((w) => ({ w: w.w, s: w.s - t0, e: w.e - t0 })));
+        onUtterance(text, s - t0, e - t0, false, info?.endOfTurn);
       },
       onActivity: () => {
-        // Still talking: hold off consulting until they finish the thought.
-        if (speechTimer.current) armSpeechTimer(SPEECH_SETTLE_MS);
-        if (backTimer.current) clearTimeout(backTimer.current);
+        // Still talking: hold off consulting until they finish the thought. With end-of-turn
+        // detection the recognizer says when that is; otherwise wait for quiet again.
+        if (speechTimer.current) {
+          if (turnsRef.current) {
+            clearTimeout(speechTimer.current);
+            speechTimer.current = null;
+          } else armSpeechTimer(SPEECH_SETTLE_MS);
+        }
         lastActivityRef.current = Date.now();
         talkingRef.current = true;
         setCandidateTalking(true);
@@ -329,6 +426,7 @@ export default function Page() {
     },
     mutedRef
   );
+  turnsRef.current = stt.turns;
 
   // The candidate started talking over the interviewer: stop and listen.
   const bargeIn = () => {
@@ -393,8 +491,20 @@ export default function Page() {
   // --- session lifecycle ---
   const startSession = async () => {
     endedRef.current = false;
-    startRef.current = Date.now();
+    wrapAskedRef.current = false;
+    startRef.current = lastContactRef.current = Date.now();
     setPhase("live");
+    // The clock: time checks on the way, and the wrap-up question when time runs out.
+    const limit = (limitRef.current = limitMin * 60000);
+    timeTimers.current = TIME_CHECKS_MIN.filter((m) => m * 60000 < limit * 0.7).map((m) =>
+      setTimeout(() => !wrapAskedRef.current && consult("time"), limit - m * 60000)
+    );
+    timeTimers.current.push(setTimeout(() => !wrapAskedRef.current && consult("wrapup"), limit));
+    // Coach: when the interviewer has had no reason to look for a while, look anyway in case they are stuck.
+    checkinTimer.current = setInterval(() => {
+      if (modeRef.current !== "coach" || busyRef.current || speakingRef.current || wrapAskedRef.current) return;
+      if (Date.now() - lastContactRef.current > CHECKIN_MS) consult("checkin");
+    }, CHECKIN_TICK_MS);
     navigator.mediaDevices
       ?.getUserMedia({ video: true })
       .then((stream) => videoRef.current && (videoRef.current.srcObject = stream))
@@ -406,7 +516,7 @@ export default function Page() {
         // Watch the mic for the candidate talking over the interviewer.
         let loudMs = 0;
         stopVoiceWatchRef.current = watchVoice(stream, (rms) => {
-          const listening = speakingRef.current && Date.now() - speakStartRef.current > BARGE_GRACE_MS;
+          const listening = speakingRef.current && Date.now() - speakStartRef.current > graceRef.current;
           loudMs = listening && rms > BARGE_RMS ? loudMs + 50 : 0;
           if (loudMs >= BARGE_HOLD_MS) {
             loudMs = 0;
@@ -430,11 +540,13 @@ export default function Page() {
     await say(problem.intro, "intro");
     busyRef.current = false;
     if (endedRef.current) return;
-    // Fetch the backchannel clips one at a time, after the intro, to stay under the voice provider's concurrency limit.
+    // Fetch the short clips one at a time, after the intro, to stay under the voice provider's concurrency limit.
     (async () => {
-      for (const phrase of BACKCHANNELS) {
-        const url = await tts.preload(phrase);
-        if (url) backchannelsRef.current.push(url);
+      for (const [phrases, into] of [[BACKCHANNELS, backchannelsRef], [THINKING_CLIPS, thinkingRef]] as const) {
+        for (const phrase of phrases) {
+          const url = await tts.preload(phrase);
+          if (url) into.current.push(url);
+        }
       }
     })();
     const next = pendingRef.current;
@@ -448,7 +560,9 @@ export default function Page() {
     stt.stop();
     tts.stop();
     stopVoiceWatchRef.current?.();
-    [speechTimer, codeTimer, talkTimer, backTimer, unmuteTimer].forEach((t) => t.current && clearTimeout(t.current));
+    [speechTimer, codeTimer, talkTimer, unmuteTimer].forEach((t) => t.current && clearTimeout(t.current));
+    timeTimers.current.forEach(clearTimeout);
+    if (checkinTimer.current) clearInterval(checkinTimer.current);
     (videoRef.current?.srcObject as MediaStream | null)?.getTracks().forEach((t) => t.stop());
     if (recorderRef.current?.state === "recording") recorderRef.current.stop();
     showReport(now());
@@ -457,7 +571,7 @@ export default function Page() {
   // Computes metrics from the refs, switches to the report page, and asks for the written feedback.
   const showReport = async (sessionMs: number) => {
     const editTimes = codeHistoryRef.current.slice(1).map((s) => s.t);
-    const m = computeMetrics(timelineRef.current, editTimes, sessionMs);
+    const m = computeMetrics(timelineRef.current, editTimes, sessionMs, wordsRef.current);
     setMetrics(m);
     setDurationMs(sessionMs);
     setPhase("report");
@@ -548,7 +662,7 @@ export default function Page() {
         <span className="spacer" />
         {phase === "live" && (
           <>
-            <span className="timer">{clock(elapsed)}</span>
+            <span className="timer">{clock(elapsed)} / {clock(limitMin * 60000)}</span>
             <button onClick={() => consult("wrapup")}>I'm done — wrap up</button>
             <button className="danger" onClick={endSession}>End &amp; get report</button>
           </>
@@ -667,6 +781,12 @@ export default function Page() {
                 <b>Coach</b>
                 <small>Asks about decisions you didn't explain. Gives small hints when you ask.</small>
               </button>
+            </div>
+            <div className="modes length">
+              <span className="muted">Length</span>
+              {SESSION_MINUTES.map((m) => (
+                <button key={m} className={limitMin === m ? "on" : ""} onClick={() => setLimitMin(m)}>{m} min</button>
+              ))}
             </div>
             <button className="primary" onClick={startSession}>Start interview</button>
             <p className="muted">Uses your microphone and camera. Works in Chrome. Headphones recommended.</p>
