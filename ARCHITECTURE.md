@@ -37,7 +37,7 @@ Chrome is the supported browser (Deepgram streaming works anywhere with `MediaRe
 
 ### Deployed
 
-Live at https://trojanpreps.vercel.app (Vercel project `trojanpreps`). The env vars above are set in the Vercel project for Production; change them there (Settings → Environment Variables, or `npx vercel env add`), then redeploy. Deploy with `npx vercel deploy --prod` from the repo root (run `npx vercel link` first on a new machine). Pushing to GitHub does not deploy unless the Git repo is connected in the Vercel dashboard.
+Live at https://trojanpreps.vercel.app (Vercel project `trojanpreps`). The env vars above are set in the Vercel project for Production; change them there (Settings → Environment Variables, or `npx vercel env add`), then redeploy. The GitHub repo is connected: every push to `main` deploys to production automatically (other branches get preview URLs), so a broken push goes live. Check build status on the Vercel dashboard or with `npx vercel ls`.
 
 ## Stack
 
