@@ -5,7 +5,7 @@
 An **MVP** of a voice-driven mock technical interview web app, built for the AI@USC hackathon. The candidate talks through a coding problem while an AI interviewer hears them, watches the live editor, asks grounded follow-ups, and writes an end report.
 
 - Read [ARCHITECTURE.md](ARCHITECTURE.md) before changing behavior. Check [OPEN_ISSUES.md](OPEN_ISSUES.md) for known gaps before "fixing" something that is already known.
-- Scope is deliberately small: one problem (Two Sum), one language (Python), two modes (Interview, Coach), Chrome only.
+- Scope is deliberately small: three problems picked in the lobby (Two Sum is the default and the one the demo uses), one language (Python), two modes (Interview, Coach), Chrome only.
 - Routes: `/` is a static landing page, `/dashboard` a static dashboard with sample data (other interview types are "Coming soon" placeholders), and `/interview` is the actual app. Only `/interview` does anything.
 
 ## Team

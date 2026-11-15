@@ -52,6 +52,16 @@ The `/api/redo` grader and the report on `gemini-3.8-flash` were tested with sim
 - **Coach remarks are not rate-limited in the browser**; if it over-praises, add a guard or tighten the prompt.
 - **Question detection** is a pattern match; it will miss some questions (they just get the normal 1.5s wait) and flag some statements.
 
+### Added late on 2026-11-14 (built by agents; type-checks; none of it seen in a browser)
+
+- **Said vs did** on the report. The route was called twice against the real report model: the demo session returned the planted "constant space" contradiction, a clean copy returned an empty list. Not seen: the box, its "Jump to" link, dark and mobile layouts. The `unkept` kind was never exercised. How often the model invents a mismatch is unknown (one call per case). A quote stitched across two speech events passes verification but gets no jump link; `did` is a substring match, so a partial line passes.
+- **"Hear it"** on the redo card's strong answer: playback, the cache, Stop, and the browser-voice fallback. Cached blob URLs are never revoked (small leak per page load).
+- **Dragging the replay playhead.** If the pointer is held still while playing, the playhead plays on away from it. Rapid seeks of the recorded mic audio may be choppy. A touch that starts on the track does not scroll the page.
+- **Words kept when a line starts over an unfinished sentence** (`stt.flush()`, see ARCHITECTURE "Speaking over an unfinished sentence"). Reasoned through by reading only. Listen for: a redundant line from the interviewer right after a time check (a speech consult is queued behind it). Still lost: words during the 2s cut-in grace if the candidate then stops, and the last few hundred ms before the audio starts. Not covered on the Chrome fallback. The flushed speech event can carry a `t` slightly later than the line it sits before.
+- **Problem picker, Valid Parentheses and Best Time to Buy and Sell Stock.** The harness's Python was run outside the browser with correct and wrong solutions for all three problems and behaved; one clarification per new problem was answered correctly by the live model. Not checked: the select in the lobby, the editor resetting on change, the generalised harness inside Pyodide, the spoken intros, probe quality and the report on the new problems. The harness is strict about booleans (`is_valid` returning 1 fails). The keyterm list grew by 11 and Deepgram's limit was not checked. The demo session and the dashboard's sample rows are Two Sum only; the landing page's code example is Two Sum. The late copy edits to the landing page, dashboard and footer have not been looked at.
+
+- **Timeline at a glance** (headline meters, milestone chips, typing gradient, three-state pins, ≠ pins). Seen in headless-Chrome screenshots of `/interview?demo` in both themes; the report route returned sensible milestones twice for the demo session. Not exercised: dragging over the new pins, clicking a chip, a retake turning a pin green, the red "never mentioned" pin, a hit chip with no time, the chips' pending state. Pins close together overlap. A milestone time or ≠ pin needs the quote to sit inside one speech event. Changed after that screenshot and seen only in a second one: neutral capsule-shaped speaker lanes, no separate probe colour, the landing page's sample timeline redrawn to match. Not seen: a retake turning its row under the track green.
+
 ### Fixed after a code audit (2026-11-14), still to be confirmed by ear
 
 These were found by reading the code after the live voice felt inconsistent, and are fixed in code:
@@ -94,7 +104,7 @@ These were found by reading the code after the live voice felt inconsistent, and
 
 ## Not built
 
-18. **Only one problem and one language.** The test harness assumes Two Sum's signature (see "Common changes" in the architecture doc).
+18. **Three problems, one language.** Only Two Sum has been exercised properly. Tests must have JSON-representable arguments and results.
 19. **No session persistence.** Refreshing the page loses the session and the report.
 21. **No camera analysis.** Out of scope by design; the camera is only there to make it feel like a call.
 22. **Design tradeoffs** are scored together with complexity, not as their own score.

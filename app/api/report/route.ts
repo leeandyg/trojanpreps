@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { chatJSON, REPORT_MODEL } from "@/lib/llm";
-import { REPORT_SYSTEM } from "@/lib/prompts";
+import { reportSystem } from "@/lib/prompts";
+import { getProblem } from "@/lib/problem";
 import { formatTimeline, numberLines } from "@/lib/format";
-import type { Evidence, Report, TimelineEvent } from "@/lib/types";
+import type { Evidence, Milestone, Report, SaidVsDid, TimelineEvent } from "@/lib/types";
 
 // The model sometimes returns an object or list where a sentence was asked for.
 // Flatten anything like that to plain text so the page can always render it.
@@ -12,7 +13,7 @@ const text = (v: unknown): string =>
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 export async function POST(req: Request) {
-  const { mode, code, timeline, run, decisions, metrics } = await req.json();
+  const { problemId, mode, code, timeline, run, decisions, metrics } = await req.json();
 
   const user = `MODE: ${mode}
 
@@ -32,9 +33,10 @@ DELIVERY METRICS
 ${JSON.stringify(metrics)}`;
 
   try {
-    const raw = await chatJSON<any>(REPORT_SYSTEM, user, 0.2, REPORT_MODEL);
+    const raw = await chatJSON<any>(reportSystem(getProblem(problemId)), user, 0.2, REPORT_MODEL);
     const evidence = (e: any) => ({ source: e?.source === "wrote" ? "wrote" : "said", quote: text(e?.quote) }) as Evidence;
     const score = (s: any) => ({ score: Math.min(4, Math.max(1, Math.round(Number(s?.score) || 1))), why: text(s?.why) });
+    const milestone = (x: any): Milestone => ({ hit: x?.hit === true, quote: x?.hit === true ? text(x?.quote).trim() : "" });
     const report: Report = {
       summary: text(raw.summary),
       delivery: text(raw.delivery),
@@ -50,6 +52,21 @@ ${JSON.stringify(metrics)}`;
         evidence: evidence(raw.missed_explanation?.evidence),
       },
       retry_exercise: { exercise: text(raw.retry_exercise?.exercise), evidence: evidence(raw.retry_exercise?.evidence) },
+      said_vs_did: (Array.isArray(raw.said_vs_did) ? raw.said_vs_did : [])
+        .map((x: any): SaidVsDid => ({
+          kind: x?.kind === "unkept" ? "unkept" : "contradiction",
+          said: text(x?.said).trim(),
+          did: text(x?.did).trim(),
+          note: text(x?.note),
+        }))
+        .filter((x: SaidVsDid) => x.said)
+        .slice(0, 3),
+      milestones: {
+        clarified: milestone(raw.milestones?.clarified),
+        planned: milestone(raw.milestones?.planned),
+        traced_example: milestone(raw.milestones?.traced_example),
+        stated_complexity: milestone(raw.milestones?.stated_complexity),
+      },
     };
 
     // Check each quote really appears in what was said or written.
@@ -65,6 +82,16 @@ ${JSON.stringify(metrics)}`;
     check(report.strength?.evidence);
     check(report.missed_explanation?.evidence);
     check(report.retry_exercise?.evidence);
+    // Said-vs-did quotes are stricter: the claim must be in the speech and the line in the code.
+    for (const x of report.said_vs_did) {
+      const q = norm(x.said);
+      x.saidVerified = q.length > 0 && said.includes(q);
+      if (x.did) x.didVerified = norm(x.did).length > 0 && wrote.includes(norm(x.did));
+    }
+    // A milestone stays hit when its quote is not found; the page just cannot place it in time.
+    for (const x of Object.values(report.milestones)) {
+      if (x.hit) x.verified = norm(x.quote).length > 0 && said.includes(norm(x.quote));
+    }
 
     return NextResponse.json(report);
   } catch (e: any) {

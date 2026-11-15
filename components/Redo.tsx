@@ -7,8 +7,31 @@ import type { RedoResult, RedoTarget } from "@/lib/types";
 
 const MAX_SECONDS = 45;
 
+// Model answer text -> its audio (a blob URL, or null for "use the browser voice").
+// Kept outside the component so a clip is fetched once, even if the card is reopened.
+const clips = new Map<string, Promise<string | null>>();
+
+function fetchClip(text: string) {
+  let clip = clips.get(text);
+  if (!clip) {
+    clip = fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      signal: AbortSignal.timeout(20000),
+    })
+      .then(async (res) => (res.status === 200 ? URL.createObjectURL(await res.blob()) : null))
+      .catch(() => null);
+    clips.set(text, clip);
+    // nothing to keep when there is no premium voice; ask again next time
+    clip.then((url) => !url && clips.delete(text));
+  }
+  return clip;
+}
+
 // Re-explain one moment out loud and get it graded against the first attempt.
 export default function Redo(props: {
+  problemId: string;
   target: RedoTarget;
   attempts: RedoResult[];
   onResult: (r: RedoResult) => void;
@@ -22,6 +45,44 @@ export default function Redo(props: {
   const saidRef = useRef("");
   const startedRef = useRef(0);
   const mutedRef = useRef(false);
+  const [hear, setHear] = useState<"idle" | "loading" | "playing">("idle");
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const utterRef = useRef<SpeechSynthesisUtterance | null>(null); // held so Chrome doesn't drop it mid-speech
+  const hearRef = useRef(0); // bumped on every play/stop, so an outdated one does nothing
+
+  const stopHearing = () => {
+    hearRef.current++;
+    audioRef.current?.pause();
+    audioRef.current = null;
+    speechSynthesis.cancel();
+    setHear("idle");
+  };
+  // Speaks the model answer in the interviewer's voice (browser voice if there is no premium one).
+  const hearIt = async (text: string) => {
+    stopHearing();
+    const id = hearRef.current;
+    setHear("loading");
+    const url = await fetchClip(text);
+    if (id !== hearRef.current) return;
+    setHear("playing");
+    const done = () => {
+      if (id === hearRef.current) setHear("idle");
+    };
+    if (url) {
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = audio.onerror = done;
+      audio.play().catch(done);
+    } else {
+      const u = new SpeechSynthesisUtterance(text);
+      utterRef.current = u;
+      u.rate = 1.05;
+      u.onend = u.onerror = done;
+      speechSynthesis.speak(u);
+    }
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => stopHearing, []);
 
   const stt = useSpeechRecognition(
     {
@@ -35,13 +96,14 @@ export default function Redo(props: {
   );
 
   const grade = async (retake: string, seconds: number, spoken: boolean) => {
+    stopHearing();
     setStatus("grading");
     setError("");
     try {
       const res = await fetch("/api/redo", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...target, retake }),
+        body: JSON.stringify({ ...target, retake, problemId: props.problemId }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -59,6 +121,7 @@ export default function Redo(props: {
   };
 
   const start = () => {
+    stopHearing(); // or the mic would record it
     saidRef.current = "";
     setSaid("");
     setLeft(MAX_SECONDS);
@@ -160,6 +223,9 @@ export default function Redo(props: {
             <details>
               <summary>One strong way to say it</summary>
               <p>{last.model_answer}</p>
+              {hear === "idle" && <button className="small" onClick={() => hearIt(last.model_answer)}>▶ Hear it</button>}
+              {hear === "loading" && <button className="small" onClick={stopHearing}>Loading… ■</button>}
+              {hear === "playing" && <button className="small" onClick={stopHearing}>■ Stop</button>}
             </details>
           </div>
         )}

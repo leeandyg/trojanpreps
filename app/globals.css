@@ -5,6 +5,7 @@
   --text: #0c1d3c; --text-2: #3d4c69; --muted: #66758f;
   --accent: #5546f2; --accent-ink: #4336d6; --on-accent: #ffffff;
   --green: #0b8f63; --red: #d6334f; --amber: #b56a00; --purple: #7a45e0;
+  --heat-mid: #e6a100; /* middle of the green → amber → red fills; brighter than --amber, which is tuned for text */
   /* the mesh, in USC cardinal and gold: used on the orb, the lobby ribbon and the page wash, nowhere else */
   --mesh-1: #990000; --mesh-2: #ffcc00; --mesh-3: #d8452f; --mesh-4: #ffb300;
   --glass: rgba(255, 255, 255, .68); --glass-line: rgba(255, 255, 255, .9); --scrim: rgba(236, 240, 250, .55);
@@ -26,6 +27,7 @@
   --text: #e9edfb; --text-2: #bcc5e2; --muted: #8590b8;
   --accent: #8d83ff; --accent-ink: #b3acff; --on-accent: #0a0d24;
   --green: #3fdc9b; --red: #ff6f87; --amber: #ffc152; --purple: #b99cff;
+  --heat-mid: #ffc152;
   --glass: rgba(16, 22, 52, .62); --glass-line: rgba(160, 175, 255, .16); --scrim: rgba(4, 7, 18, .6);
   --wash: .26; --ribbon: .7;
   --shadow-1: 0 1px 2px rgba(0, 0, 0, .4);
@@ -175,6 +177,10 @@ button.theme-toggle { display: grid; place-items: center; width: 32px; height: 3
 .card h1 { margin: 0 44px 10px 0; font-size: 34px; letter-spacing: -.035em; line-height: 1.08; }
 .card:not(.redo) > p { color: var(--text-2); font-size: 15px; margin: 0 0 4px; }
 .card:not(.redo) > p.muted { color: var(--muted); font-size: 12.5px; margin-top: 16px; }
+/* the problem picker sits inside the lobby sentence */
+select.pick { font: inherit; font-weight: 600; color: var(--text); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 8px; padding: 3px 8px; margin: 2px 0; max-width: 100%; cursor: pointer; box-shadow: var(--shadow-1); transition: border-color .15s, box-shadow .15s; }
+select.pick:hover { border-color: var(--accent); }
+select.pick:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
 .card > .theme-toggle { position: absolute; top: 22px; right: 22px; }
 .modes.big { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 22px 0 18px; }
 .modes.big button { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 14px; border-radius: 12px; border-color: var(--line); }
@@ -201,6 +207,9 @@ button.theme-toggle { display: grid; place-items: center; width: 32px; height: 3
 .box.good { --tone: var(--green); } .box.miss { --tone: var(--red); } .box.retry { --tone: var(--accent-ink); }
 .evidence { font-size: 13px; border-left: 2px solid var(--line-strong); padding-left: 10px; color: var(--text-2); }
 .tag { display: block; font-size: 12px; color: var(--muted); }
+.box.mismatch { --tone: var(--amber); margin-top: 12px; }
+.svd + .svd { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.svd-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 6px; }
 .scores { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .score { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; box-shadow: var(--shadow-1); }
 .score p { margin: 6px 0 0; color: var(--text-2); }
@@ -224,24 +233,39 @@ button.small, .btn.small { padding: 5px 14px; font-size: 14px; border-radius: 8p
 button.link { background: none; border: none; box-shadow: none; padding: 0; color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; font-variant-numeric: tabular-nums; }
 button.link:hover { transform: none; box-shadow: none; }
 .row { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
-.flag { color: var(--red); }
+.flag { color: var(--red); } .flag.partial { color: var(--amber); } .flag.explained { color: var(--green); }
 .replay { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; box-shadow: var(--shadow-2); }
 .replay-controls { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-.track { position: relative; margin-left: 84px; padding: 14px 0 2px; cursor: pointer; user-select: none; }
+.track { position: relative; margin-left: 84px; padding: 14px 0 2px; cursor: pointer; user-select: none; touch-action: none; }
 .lane { position: relative; height: 20px; margin: 3px 0; background: var(--sunken); border-radius: 5px; }
 .lane-name { position: absolute; left: -84px; top: 1px; width: 78px; font-size: 11.5px; color: var(--muted); }
 .seg { position: absolute; top: 3px; bottom: 3px; border-radius: 3px; min-width: 3px; }
-.seg.you { background: var(--green); }
-.seg.ai { background: var(--accent); } .seg.ai.probe, .seg.ai.wrapup { background: var(--purple); }
-.seg.typing { background: var(--muted); opacity: .7; }
-.seg.silent { top: 0; bottom: 0; opacity: 1; border: 1px solid var(--red); background: repeating-linear-gradient(45deg, color-mix(in srgb, var(--red) 50%, transparent) 0 4px, color-mix(in srgb, var(--red) 15%, transparent) 4px 8px); }
+/* who is talking: thin neutral capsules, so only the typing lane's blocks carry a judgement */
+.seg.you, .seg.ai { top: 6px; bottom: 6px; border-radius: 99px; }
+.seg.you { background: var(--text-2); }
+.seg.ai { background: var(--accent); }
 .pin { position: absolute; transform: translateX(-50%); font-size: 11px; line-height: 20px; }
 .pin.flag { top: -3px; font-size: 13px; }
+/* typing coloured by how long since the candidate spoke; the fill is set inline from heat() in Replay.tsx */
+.seg.quiet { top: 0; bottom: 0; }
+.legend .seg.heat { width: 40px; background: linear-gradient(90deg, var(--green), var(--heat-mid), var(--red)); }
+/* the at-a-glance line and milestone chips above the replay */
+.glance { display: flex; flex-wrap: wrap; gap: 6px 28px; margin-bottom: 10px; color: var(--text-2); }
+.glance > span { display: inline-flex; align-items: center; gap: 6px; }
+.glance b { color: var(--text); font-variant-numeric: tabular-nums; }
+.meter { width: 72px; height: 6px; border-radius: 3px; background: var(--line-strong); overflow: hidden; }
+.meter i { display: block; height: 100%; border-radius: 3px; }
+.milestones { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.milestones > * { font-size: 12.5px; font-weight: 500; line-height: 1.55; padding: 3px 11px; border-radius: 99px; border: 1px solid var(--line); background: var(--sunken); color: var(--muted); box-shadow: none; }
+.milestones .hit { color: var(--green); border-color: color-mix(in srgb, var(--green) 35%, var(--line)); background: color-mix(in srgb, var(--green) 9%, var(--panel)); }
+.milestones.pending > * { opacity: .5; }
 .playhead { position: absolute; top: 10px; bottom: 0; width: 2px; border-radius: 1px; background: var(--text); pointer-events: none; }
 .legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 6px 0 4px 84px; }
 .legend .seg { position: static; display: inline-block; width: 16px; height: 9px; margin-right: 4px; }
+.legend .seg.you, .legend .seg.ai { height: 6px; vertical-align: 1px; }
 .moments { display: grid; gap: 6px; margin: 10px 0 4px; }
-.moment { display: flex; align-items: center; gap: 10px; background: color-mix(in srgb, var(--red) 7%, var(--panel)); border: 1px solid color-mix(in srgb, var(--red) 30%, var(--line)); border-radius: 9px; padding: 6px 10px; }
+.moment { --tone: var(--red); display: flex; align-items: center; gap: 10px; background: color-mix(in srgb, var(--tone) 7%, var(--panel)); border: 1px solid color-mix(in srgb, var(--tone) 30%, var(--line)); border-radius: 9px; padding: 6px 10px; }
+.moment.partial { --tone: var(--amber); } .moment.explained { --tone: var(--green); }
 .moment span { flex: 1; }
 .replay-body { display: grid; grid-template-columns: 1.3fr 1fr; gap: 10px; margin-top: 10px; height: 280px; }
 .replay-code { border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
@@ -268,6 +292,7 @@ pre.code .hl { background: color-mix(in srgb, var(--amber) 16%, transparent); bo
 .redo-result.good { --tone: var(--green); } .redo-result.miss { --tone: var(--red); }
 .redo-result p { margin: 8px 0; }
 .redo-result summary { cursor: pointer; color: var(--accent-ink); }
+.redo-result details button { margin-bottom: 4px; }
 
 /* landing and dashboard (sample content only; see app/landing and app/dashboard) */
 .topbar.site { position: sticky; top: 0; z-index: 5; padding: 10px max(20px, calc(50vw - 540px)); }
@@ -348,7 +373,7 @@ table.sessions { width: 100%; border-collapse: separate; border-spacing: 0; back
   .editor-wrap { height: 360px; flex: none; }
   .topbar { flex-wrap: wrap; }
   .topbar > .muted { display: none; }
-  .three, .scores, .modes.big { grid-template-columns: 1fr; }
+  .three, .scores, .modes.big, .svd-pair { grid-template-columns: 1fr; }
   .stats { grid-template-columns: 1fr 1fr; }
   .report header { flex-wrap: wrap; }
   .replay-body { grid-template-columns: 1fr; height: auto; }

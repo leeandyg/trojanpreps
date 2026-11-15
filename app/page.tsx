@@ -12,11 +12,16 @@ const CODE = [
 ];
 const QUOTED = [4, 6]; // the lines the question is about
 
-// Replay lanes drawn with the same classes as components/Replay.tsx. Positions are illustrative.
+// Replay lanes drawn with the same classes as components/Replay.tsx. Positions and colours are illustrative.
 const YOU = [[2, 14], [19, 9], [41, 7], [62, 16], [84, 10]];
-const AI = [[0, 2, ""], [16, 3, ""], [50, 5, "probe"], [79, 4, ""], [95, 4, "wrapup"]] as const;
-const TYPING = [[22, 26], [56, 20]];
-const SILENT = [30, 11];
+const AI = [[0, 2], [16, 3], [50, 5], [79, 4], [95, 4]];
+// [left, width, fill]: green where the typing was narrated, through amber to red where it was silent
+const G = "var(--green)", A = "var(--heat-mid)", R = "var(--red)";
+const TYPING: [number, number, string][] = [
+  [22, 26, `linear-gradient(90deg, ${G}, ${G} 25%, ${A} 45%, ${R} 65%, ${R} 80%, ${A})`],
+  [56, 20, `linear-gradient(90deg, ${A}, ${G} 30%, ${G})`],
+];
+const PINS = [[26, "explained", "✓"], [37, "", "⚑"], [60, "partial", "⚑"]] as const;
 
 const pct = (n: number) => `${n}%`;
 
@@ -105,6 +110,13 @@ export default function Landing() {
                 much of your coding you narrated.
               </dd>
             </div>
+            <div>
+              <dt>It checks what you said against what you did</dt>
+              <dd>
+                Claim a complexity your code does not have, or promise to handle a case and never do, and the report
+                puts your words next to your code.
+              </dd>
+            </div>
           </dl>
         </div>
       </section>
@@ -113,8 +125,9 @@ export default function Landing() {
         <div className="wrap">
           <h2>Replay the session and redo the moments you skipped</h2>
           <p className="lede">
-            Every session becomes a timeline of when you talked, when you typed, and where you typed in silence. Pick
-            a flagged moment, explain it again, and get the retake graded against your first attempt.
+            Every session becomes a timeline of when you talked and when you typed, shaded green where you narrated your code and red where you typed in silence. Pick
+            a flagged moment, explain it again, get the retake graded against your first attempt, and hear one strong
+            way to say it.
           </p>
           <div className="replay" role="img" aria-label="Illustration of a replay timeline with lanes for you, the interviewer and typing">
             <div className="track">
@@ -124,22 +137,21 @@ export default function Landing() {
               </div>
               <div className="lane">
                 <span className="lane-name">Tommy</span>
-                {AI.map(([l, w, kind], i) => <i key={i} className={`seg ai ${kind}`} style={{ left: pct(l), width: pct(w) }} />)}
+                {AI.map(([l, w], i) => <i key={i} className="seg ai" style={{ left: pct(l), width: pct(w) }} />)}
               </div>
               <div className="lane">
                 <span className="lane-name">Typing</span>
-                {TYPING.map(([l, w], i) => <i key={i} className="seg typing" style={{ left: pct(l), width: pct(w) }} />)}
-                <i className="seg silent" style={{ left: pct(SILENT[0]), width: pct(SILENT[1]) }} />
+                {TYPING.map(([l, w, fill], i) => <i key={i} className="seg heat" style={{ left: pct(l), width: pct(w), background: fill }} />)}
               </div>
-              <b className="pin flag" style={{ left: pct(35) }}>⚑</b>
+              {PINS.map(([l, state, mark], i) => <b key={i} className={`pin flag ${state}`} style={{ left: pct(l) }}>{mark}</b>)}
             </div>
             <div className="legend muted small">
               <span><i className="seg you" /> you talking</span>
               <span><i className="seg ai" /> Tommy</span>
-              <span><i className="seg ai probe" /> probe</span>
-              <span><i className="seg typing" /> typing</span>
-              <span><i className="seg silent" /> typing in silence</span>
-              <span><b className="flag">⚑</b> unexplained decision</span>
+              <span><i className="seg heat" /> typing: narrated → silent</span>
+              <span><b className="flag explained">✓</b> explained</span>
+              <span><b className="flag partial">⚑</b> said what, not why</span>
+              <span><b className="flag">⚑</b> never explained</span>
             </div>
           </div>
           <p className="muted small">Illustration. <a href="/interview?demo">Open a sample report</a> to try the real replay.</p>

@@ -101,6 +101,20 @@ export type Metrics = {
 
 export type Evidence = { source: "said" | "wrote"; quote: string; verified?: boolean };
 
+// A place where what the candidate said does not match the code. did is "" when the code is simply absent.
+export type SaidVsDid = {
+  kind: "contradiction" | "unkept";
+  said: string;
+  did: string;
+  note: string;
+  saidVerified?: boolean;
+  didVerified?: boolean;
+};
+
+// Something a strong candidate does at some point. quote is the transcript line that shows it, "" when not hit.
+export type Milestone = { hit: boolean; quote: string; verified?: boolean };
+export type MilestoneKey = "clarified" | "planned" | "traced_example" | "stated_complexity";
+
 export type Report = {
   summary: string;
   scores: Record<
@@ -111,4 +125,25 @@ export type Report = {
   missed_explanation: { observation: string; evidence: Evidence };
   retry_exercise: { exercise: string; evidence: Evidence };
   delivery: string;
+  said_vs_did: SaidVsDid[];
+  milestones: Record<MilestoneKey, Milestone>;
+};
+
+// One coding problem. Everything problem-specific lives in lib/problem.ts, including the wording the prompts borrow.
+export type Problem = {
+  id: string;
+  title: string;
+  functionName: string;
+  params: string[]; // parameter names, in order; used to label test inputs
+  statement: string;
+  examples: { input: string; output: string; note?: string }[];
+  starterCode: string;
+  tests: { args: unknown[]; expected: unknown }[]; // JSON values; the function is called as fn(*args)
+  anyOrder?: boolean; // the result is a list whose order does not matter
+  intro: string; // the fixed opening line, spoken
+  interviewerNotes: string; // only the interviewer sees this
+  edgeCases: string; // what the report's edge_cases score looks for
+  alternatives: string; // the other approaches the complexity_tradeoffs score expects weighed
+  announced: string; // quoted sayings that name a choice without a reason (ledger: explained = false)
+  explained: string; // a quoted saying that gives the reason (ledger: explained = true)
 };

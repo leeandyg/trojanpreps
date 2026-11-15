@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { problem } from "@/lib/problem";
+import { DEFAULT_PROBLEM, PROBLEMS, getProblem } from "@/lib/problem";
 import { clock } from "@/lib/format";
 import { computeMetrics } from "@/lib/metrics";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
@@ -85,6 +85,7 @@ const meaningfulLines = (code: string) =>
 export default function Page() {
   const [phase, setPhase] = useState<"lobby" | "live" | "report">("lobby");
   const [mode, setMode] = useState<Mode>("coach");
+  const [problem, setProblem] = useState(DEFAULT_PROBLEM); // chosen in the lobby; fixed once the session is live
   const [code, setCode] = useState(problem.starterCode);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
@@ -106,6 +107,7 @@ export default function Page() {
   const startRef = useRef(0);
   const modeRef = useRef(mode);
   const codeRef = useRef(code);
+  const problemRef = useRef(problem);
   const timelineRef = useRef<TimelineEvent[]>([]);
   const decisionsRef = useRef<Decision[]>([]);
   const runRef = useRef<RunResult | null>(null);
@@ -145,6 +147,8 @@ export default function Page() {
   const falseHoldsRef = useRef({ line: null as object | null, n: 0 }); // pauses on the current line that turned out to be noise
   const lastActivityRef = useRef(0); // when the mic last heard the candidate
   const speechSeqRef = useRef(0); // counts candidate utterances, to notice speech that arrived mid-request
+  const sttFlushRef = useRef(() => {}); // stt.flush, for voice() which is declared before stt
+  const flushingRef = useRef(false); // an utterance arriving now was said before the line that is starting
   const speechTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const codeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const talkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -182,6 +186,10 @@ export default function Page() {
           ev.heard = ""; // none of it was spoken, and the model is told so
           return tts.stop();
         }
+        // Mid-sentence (the turn has not ended yet): keep what they have said so far, the mute would drop it.
+        flushingRef.current = true;
+        sttFlushRef.current();
+        flushingRef.current = false;
         mutedRef.current = true;
       });
       if (url) ev.audioUrl = url;
@@ -272,6 +280,7 @@ export default function Page() {
       const stage = asked("closing") ? "closing" : asked("wrapup") ? "wrapup" : "working";
       const sentCode = codeRef.current;
       const body = JSON.stringify({
+        problemId: problemRef.current.id,
         mode: modeRef.current,
         trigger,
         code: sentCode,
@@ -413,15 +422,19 @@ export default function Page() {
       speechSeqRef.current++;
       // Join this piece onto the previous one if the candidate barely paused, so one
       // thought is one block in the transcript (and one line for the model).
-      const tl = timelineRef.current;
+      let tl = timelineRef.current;
+      // Words kept as a line starts playing were said before that line: they go ahead of it,
+      // so they do not read as a reply to it.
+      const line = flushingRef.current && tl[tl.length - 1] === currentLineRef.current ? tl.slice(-1) : [];
+      if (line.length) tl = tl.slice(0, -1);
       const prev = tl[tl.length - 1];
       if (!isTyped && prev?.type === "speech" && !prev.typed && start - prev.end < MERGE_GAP_MS) {
         text = `${prev.text} ${text}`;
-        timelineRef.current = [...tl.slice(0, -1), { ...prev, end, text }];
-        setTimeline(timelineRef.current);
+        timelineRef.current = [...tl.slice(0, -1), { ...prev, end, text }, ...line];
       } else {
-        addEvent({ type: "speech", t: start, start, end, text, typed: isTyped || undefined });
+        timelineRef.current = [...tl, { type: "speech", t: start, start, end, text, typed: isTyped || undefined }, ...line];
       }
+      setTimeline(timelineRef.current);
       lastUtteranceRef.current = { text, typed: isTyped };
       // The recognizer's own end-of-turn call has already weighed the pause, so consult almost at once.
       settleRef.current = isTyped ? 0 : endOfTurn ? TURN_SETTLE_MS : looksLikeQuestion(text) ? QUESTION_SETTLE_MS : SPEECH_SETTLE_MS;
@@ -478,6 +491,7 @@ export default function Page() {
     mutedRef
   );
   turnsRef.current = stt.turns;
+  sttFlushRef.current = stt.flush;
 
   // The candidate is talking over the interviewer: stop the line and listen.
   // `from` (a Date.now() value) is where their words began, if known.
@@ -540,7 +554,7 @@ export default function Page() {
   };
 
   const runCode = async () => {
-    const result = await py.run(codeRef.current);
+    const result = await py.run(codeRef.current, problemRef.current);
     runRef.current = result;
     setRunResult(result);
     const summary = result.error
@@ -551,6 +565,18 @@ export default function Page() {
   };
 
   // --- session lifecycle ---
+  // Lobby only: the editor, the code history and the "already looked at" code all restart from the new starter code.
+  const pickProblem = (id: string) => {
+    const p = getProblem(id);
+    problemRef.current = p;
+    setProblem(p);
+    codeRef.current = lastCheckedCodeRef.current = p.starterCode;
+    codeHistoryRef.current = [{ t: 0, code: p.starterCode }];
+    setCode(p.starterCode);
+    runRef.current = null;
+    setRunResult(null);
+  };
+
   const startSession = async () => {
     endedRef.current = false;
     wrapAskedRef.current = false;
@@ -602,7 +628,7 @@ export default function Page() {
       .catch(() => {});
     stt.start();
     busyRef.current = true;
-    await say(problem.intro, "intro");
+    await say(problemRef.current.intro, "intro");
     busyRef.current = false;
     if (endedRef.current) return;
     // Fetch the short clips one at a time, after the intro, to stay under the voice provider's concurrency limit.
@@ -645,6 +671,7 @@ export default function Page() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          problemId: problemRef.current.id,
           mode: modeRef.current,
           code: codeRef.current,
           timeline: timelineRef.current,
@@ -690,6 +717,7 @@ export default function Page() {
   if (phase === "report") {
     return (
       <ReportView
+        problem={problem}
         report={report}
         metrics={metrics!}
         decisions={decisions}
@@ -835,7 +863,13 @@ export default function Page() {
             <ThemeToggle />
             <h1>Mock technical interview</h1>
             <p>
-              You'll solve <b>{problem.title}</b> in Python while talking to {BRAND.interviewer}, an AI interviewer that hears you and sees
+              You'll solve{" "}
+              <select className="pick" aria-label="Problem" value={problem.id} onChange={(e) => pickProblem(e.target.value)}>
+                {PROBLEMS.map((p) => (
+                  <option key={p.id} value={p.id}>{p.title}</option>
+                ))}
+              </select>{" "}
+              in Python while talking to {BRAND.interviewer}, an AI interviewer that hears you and sees
               your editor. Afterwards you get a report on how well you explained your thinking.
             </p>
             <div className="modes big">

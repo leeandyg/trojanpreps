@@ -21,7 +21,7 @@ export function SiteFoot() {
   return (
     <footer className="foot">
       <div className="wrap">
-        {BRAND.name}: {BRAND.tagline.toLowerCase()}. Built at the AI@USC hackathon. One problem (Two Sum) in Python for now.
+        {BRAND.name}: {BRAND.tagline.toLowerCase()}. Built at the AI@USC hackathon.
       </div>
     </footer>
   );

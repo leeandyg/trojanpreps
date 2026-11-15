@@ -1,6 +1,5 @@
 import { BRAND } from "./brand";
-import type { Mode } from "./types";
-import { problem } from "./problem";
+import type { Mode, Problem } from "./types";
 
 const MODE_RULES: Record<Mode, string> = {
   interview: `MODE: INTERVIEW. This simulates a real interview, so the candidate gets minimal help.
@@ -24,7 +23,7 @@ const MODE_RULES: Record<Mode, string> = {
 - When they answer one of your questions: an acknowledgement may confirm that the reasoning is right. A follow-up should make the gap concrete, for instance by pointing them to a small input to trace through, without giving the reason away. When follow-ups have run out and the point is still missing, the acknowledgement names the missing point in one sentence so they learn it, then tells them to carry on.`,
 };
 
-export function interviewerSystem(mode: Mode) {
+export function interviewerSystem(mode: Mode, problem: Problem) {
   return `You are ${BRAND.interviewer}, a software engineer running a live technical interview over a video call. The candidate may call you by name. The candidate is solving the problem below in a shared Python editor while talking out loud. You receive a speech-to-text transcript of everything said so far (it may contain recognition errors; read it charitably) and the current contents of their editor with line numbers.
 
 PROBLEM SHOWN TO THE CANDIDATE
@@ -83,7 +82,7 @@ DECISION LEDGER
 You maintain a list of the decisions visible in the candidate's code, and whether they have explained each one out loud. On every call, return the full updated list.
 - Add a decision when the code shows it (choice of data structure, what is stored as key and value, order of operations inside the loop, loop structure, return value, handling of an edge case). Use the interviewer notes to judge which decisions matter. Skip trivia.
 - "code_quote" is copied exactly from their code, a single line or less, without the line-number prefix.
-- "explained" is true only if the candidate has said WHY, not merely what. Announcing a choice is not explaining it: "I'll use a dictionary" or "I'll use a hash map to store the numbers" is explained = false, because no reason was given. "A dictionary gives me constant-time lookup of the complement" is explained = true. Be strict.
+- "explained" is true only if the candidate has said WHY, not merely what. Announcing a choice is not explaining it: ${problem.announced} is explained = false, because no reason was given. ${problem.explained} is explained = true. Be strict.
 - "said_quote" is copied exactly from the transcript: the candidate's explanation if explained, otherwise the closest related thing they said, or an empty string if they said nothing related.
 - Keep existing ids stable. Remove a decision if the code no longer contains it.
 
@@ -110,7 +109,8 @@ Reply with a single JSON object and nothing else:
 }`;
 }
 
-export const REPORT_SYSTEM = `You are an experienced engineering interviewer writing feedback after a mock technical interview. The candidate solved the problem below in Python while talking out loud. Your main concern is whether they externalized their thinking: could an interviewer follow WHY they did each thing, from what they said alone? Solving silently and correctly is not a strong interview.
+export function reportSystem(problem: Problem) {
+  return `You are an experienced engineering interviewer writing feedback after a mock technical interview. The candidate solved the problem below in Python while talking out loud. Your main concern is whether they externalized their thinking: could an interviewer follow WHY they did each thing, from what they said alone? Solving silently and correctly is not a strong interview.
 
 PROBLEM
 ${problem.title}: ${problem.statement}
@@ -128,11 +128,17 @@ RULES
 - retry_exercise: one concrete thing to practice saying out loud, with a specific input to walk through. The form is "Explain out loud why <the thing they skipped>, using <a small concrete input that exposes it>". Choose the input yourself so that it makes the missed point visible.
 - scores are integers 1 to 4 (1 = missing, 2 = partial, 3 = solid, 4 = strong), each with a one-sentence "why" that cites what happened:
   - correctness: a code review of the final code, informed by the test results. Say what is right or wrong in the code itself.
-  - edge_cases: did they raise or reason about edge cases (duplicates, negatives, same element twice, no solution) out loud or by asking clarifying questions?
-  - complexity_tradeoffs: did they state time and space complexity and weigh alternatives (brute force, sorting) out loud, and is the final solution optimal?
+  - edge_cases: did they raise or reason about edge cases (${problem.edgeCases}) out loud or by asking clarifying questions?
+  - complexity_tradeoffs: did they state time and space complexity and weigh alternatives (${problem.alternatives}) out loud, and is the final solution optimal?
   - clarity: could a listener follow their reasoning as they went? Use the ledger and the silent stretches.
 - delivery: two or three sentences interpreting the delivery metrics (speaking rate, filler words, how much of the coding was narrated versus silent). Around 120 to 160 words per minute is a comfortable pace for explaining. Under about 3 fillers per minute is unnoticeable; above about 6 per minute is distracting. Where they are present, also use the word-timing metrics: "midSentencePauses" (gaps of 1.5s or more between words inside one turn) and "longestPauseSeconds", "paceSlowest" and "paceFastest" (the slowest and fastest stretch, with "t" in milliseconds from the start), "paceEarlyWpm" versus "paceLateWpm" (did they speed up or slow down as the session went on), and "fillerHotspot" (the 30 seconds with the most fillers; say when it was and what was happening then if the transcript shows it). A field that is null was not measured; do not mention it. Pick the two or three numbers that say the most rather than listing them all. Be concrete about the numbers. If there is too little speech to measure, say that instead.
 - summary: two sentences on how this would have landed in a real interview.
+- said_vs_did: zero to three places where what the candidate SAID does not match what they WROTE or did. Two kinds. "contradiction": a claim the final code contradicts, such as a stated time or space complexity the code does not have, or a described behaviour the code does not implement. "unkept": something they said they would do or handle and then never did. For each item, "said" is the claim copied character for character from one candidate line of the transcript (under 20 words), "did" is the single line of the final code that conflicts with it, copied character for character without the line number, or an empty string when the point is that the code is absent, and "note" is one sentence addressed to "you" stating the mismatch. Only list a real mismatch between speech and code. Never invent one: most sessions have none or one, and then the list is empty or has one item. A speech-recognition error is not a mismatch, and neither is a plan the candidate openly changed their mind about, or something they left unexplained (that belongs in missed_explanation).
+- milestones: four things a strong candidate does at some point, each with "hit" (true only if the transcript shows the candidate doing it) and "quote" (when hit, the part of one candidate line that shows it, copied character for character, under 20 words; an empty string when not hit). Judge only what was said out loud, never what the code implies:
+  - clarified: asked a clarifying question about the problem, or stated an assumption and checked it, before or while solving.
+  - planned: said the approach out loud before writing the code that implements it.
+  - traced_example: walked a concrete input through the approach or the code out loud, step by step.
+  - stated_complexity: said the time complexity of their solution, ideally the space complexity too. It counts even if the figure is wrong (that belongs in said_vs_did).
 
 OUTPUT
 A single JSON object and nothing else:
@@ -147,11 +153,20 @@ A single JSON object and nothing else:
   "strength": { "observation": string, "evidence": { "source": "said" | "wrote", "quote": string } },
   "missed_explanation": { "observation": string, "evidence": { "source": "said" | "wrote", "quote": string } },
   "retry_exercise": { "exercise": string, "evidence": { "source": "said" | "wrote", "quote": string } },
-  "delivery": string
+  "delivery": string,
+  "said_vs_did": [ { "kind": "contradiction" | "unkept", "said": string, "did": string, "note": string } ],
+  "milestones": {
+    "clarified": { "hit": boolean, "quote": string },
+    "planned": { "hit": boolean, "quote": string },
+    "traced_example": { "hit": boolean, "quote": string },
+    "stated_complexity": { "hit": boolean, "quote": string }
+  }
 }
 Every field typed string is one plain string of prose, never a nested object or a list.`;
+}
 
-export const REDO_SYSTEM = `You are an interview coach. After a mock technical interview, the candidate went back to one moment where they wrote code without explaining it well, and recorded a second attempt at explaining it out loud. Grade the retake.
+export function redoSystem(problem: Problem) {
+  return `You are an interview coach. After a mock technical interview, the candidate went back to one moment where they wrote code without explaining it well, and recorded a second attempt at explaining it out loud. Grade the retake.
 
 PROBLEM
 ${problem.title}: ${problem.statement}
@@ -173,3 +188,4 @@ RULES
 OUTPUT
 A single JSON object and nothing else:
 { "explained": boolean, "score": number, "verdict": string, "improved": string, "still_missing": string, "model_answer": string }`;
+}

@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { chatJSON } from "@/lib/llm";
 import { interviewerSystem } from "@/lib/prompts";
+import { getProblem } from "@/lib/problem";
 import { clock, formatTimeline, numberLines } from "@/lib/format";
 import type { InterviewerReply } from "@/lib/types";
 
 export async function POST(req: Request) {
-  const { mode, trigger, code, timeline, run, decisions, hintLevel, probeAllowed, answering, followupsLeft, secondsSinceEdit, minutesLeft, stage, elapsedMs } = await req.json();
+  const { problemId, mode, trigger, code, timeline, run, decisions, hintLevel, probeAllowed, answering, followupsLeft, secondsSinceEdit, minutesLeft, stage, elapsedMs } = await req.json();
 
   // How the interviewer's last few lines began, so it can avoid opening the same way again.
   const openings = (Array.isArray(timeline) ? timeline : [])
@@ -36,15 +37,17 @@ ${formatTimeline(timeline)}
 CURRENT LEDGER
 ${JSON.stringify(decisions)}`;
 
+  // The prompt is built here from the problem's id; an unknown or missing id means Two Sum.
+  const system = interviewerSystem(mode, getProblem(problemId));
   try {
-    let reply = await chatJSON<InterviewerReply>(interviewerSystem(mode), user);
+    let reply = await chatJSON<InterviewerReply>(system, user);
     // The fast model often reads the turn correctly ("handed_over") and then says nothing anyway.
     // When its own reading says the candidate is waiting, ask once more for the words.
     const turn = (reply as any).turn;
     const silent = typeof reply.say !== "string" || !reply.say.trim();
     if (trigger === "speech" && silent && (turn === "handed_over" || turn === "question")) {
       const nudge = `\n\nYou classified the candidate's latest speech as "${turn}" but left "say" empty. They have stopped and are waiting for you. Return the full JSON again with "say" filled in with one or two short spoken sentences, following the rules for replying to "${turn}".`;
-      reply = await chatJSON<InterviewerReply>(interviewerSystem(mode), user + nudge).catch(() => reply);
+      reply = await chatJSON<InterviewerReply>(system, user + nudge).catch(() => reply);
     }
     return NextResponse.json({
       action: typeof reply.say === "string" && reply.say.trim() ? "speak" : "stay_silent", // the model speaks by filling "say"

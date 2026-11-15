@@ -5,8 +5,9 @@ import { useChromeSpeech, type SpeechHandlers } from "./useChromeSpeech";
 // Words Deepgram should favor (keyterm prompting).
 const KEYTERMS = [
   "Tommy", // the interviewer's name
-  // the problem
+  // the problems
   "Two Sum", "nums", "target", "indices", "index", "pair", "complement", "duplicates", "negative numbers", "edge case",
+  "parentheses", "brackets", "stack", "push", "pop", "nested", "prices", "profit", "minimum", "buy", "sell",
   // data structures and Python
   "hash map", "hashmap", "hash table", "dictionary", "dict", "set", "array", "list", "tuple", "key", "value",
   "Python", "enumerate", "range", "len", "return", "for loop", "nested loop", "lookup",
@@ -45,7 +46,7 @@ export function useSpeechRecognition(handlers: SpeechHandlers, mutedRef: React.R
   const activeRef = useRef(false);
   const fallbackRef = useRef(false);
   const closeRef = useRef<(() => void) | null>(null);
-  const flushRef = useRef<(() => void) | null>(null); // delivers the turn in progress
+  const flushRef = useRef<(() => number | undefined) | null>(null); // delivers the turn in progress; returns where it ended (audio seconds)
   const t0Ref = useRef(0); // Date.now() when audio started flowing; Deepgram times are seconds since then
   const cutoffRef = useRef(0); // words starting before this (audio seconds) were heard while muted
   const muteFromRef = useRef(0); // cutoff before the current mute began
@@ -84,8 +85,9 @@ export function useSpeechRecognition(handlers: SpeechHandlers, mutedRef: React.R
       let heard = ""; // their text, to notice when something new arrives
       const flush = () => {
         const t0 = t0Ref.current;
-        if (turn.length && activeRef.current) {
-          h.current.onFinal(heard, t0 + turn[0].start * 1000, t0 + turn[turn.length - 1].end * 1000, {
+        const last = turn.length && activeRef.current ? turn[turn.length - 1] : undefined;
+        if (last) {
+          h.current.onFinal(heard, t0 + turn[0].start * 1000, t0 + last.end * 1000, {
             words: turn.map((w) => ({ w: w.word, s: t0 + w.start * 1000, e: t0 + w.end * 1000 })),
             endOfTurn: true,
           });
@@ -93,6 +95,7 @@ export function useSpeechRecognition(handlers: SpeechHandlers, mutedRef: React.R
         turn = [];
         heard = "";
         setInterim("");
+        return last?.end;
       };
 
       ws.onopen = () => {
@@ -195,7 +198,17 @@ export function useSpeechRecognition(handlers: SpeechHandlers, mutedRef: React.R
     [chromeKeepHeard]
   );
 
+  // Call just before muting. If the candidate is mid-sentence, what they have said so far is
+  // delivered now; otherwise the mute would drop it, because every later message for that
+  // turn is filtered as a whole. Does nothing when no turn is in progress. (Deepgram only.)
+  const flush = useCallback(() => {
+    if (mutedRef.current) return;
+    const end = flushRef.current?.();
+    // Later messages for this turn still carry those words: never deliver them again, on a barge-in either.
+    if (end !== undefined) cutoffRef.current = muteFromRef.current = end;
+  }, [mutedRef]);
+
   // `turns`: onFinal means a finished turn (Deepgram), not just a pause (Chrome).
-  if (fallback) return { ...chrome, turns: false, start, stop, keepHeard };
-  return { interim, supported: true, blocked, turns: true, start, stop, keepHeard };
+  if (fallback) return { ...chrome, turns: false, start, stop, keepHeard, flush };
+  return { interim, supported: true, blocked, turns: true, start, stop, keepHeard, flush };
 }

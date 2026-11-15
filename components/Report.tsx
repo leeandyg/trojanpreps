@@ -1,11 +1,11 @@
 "use client";
 import { useMemo, useState } from "react";
 import { clock } from "@/lib/format";
-import Replay, { snapshotAt, type Moment } from "./Replay";
+import Replay, { heat, snapshotAt, type Mismatch, type Moment } from "./Replay";
 import Redo from "./Redo";
 import { ThemeToggle } from "./Theme";
 import type {
-  CodeSnapshot, Decision, Evidence, Metrics, Mode, RedoResult, RedoTarget, Report, RunResult, TimelineEvent,
+  CodeSnapshot, Decision, Evidence, Metrics, MilestoneKey, Mode, Problem, RedoResult, RedoTarget, Report, RunResult, TimelineEvent,
 } from "@/lib/types";
 
 const NEARBY_MS = 30000; // how far around a moment to look for what was said
@@ -17,6 +17,18 @@ const SCORE_LABELS: [keyof Report["scores"], string][] = [
   ["correctness", "Correctness (code review)"],
 ];
 
+const MILESTONES: [MilestoneKey, string][] = [
+  ["clarified", "Clarified the problem"],
+  ["planned", "Planned before coding"],
+  ["traced_example", "Traced an example"],
+  ["stated_complexity", "Stated complexity"],
+];
+
+// A small bar filled to `value` (0..1, high is good), coloured on the replay's green → amber → red scale.
+function Meter({ value }: { value: number }) {
+  return <span className="meter"><i style={{ width: `${Math.round(value * 100)}%`, background: heat(1 - value) }} /></span>;
+}
+
 function Quote({ ev }: { ev?: Evidence }) {
   if (!ev?.quote) return null;
   return (
@@ -27,6 +39,8 @@ function Quote({ ev }: { ev?: Evidence }) {
     </div>
   );
 }
+
+const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 // Whether the candidate's pace changed between the two halves of the session.
 function paceTrend(early: number, late: number) {
@@ -43,6 +57,7 @@ function paceNote(wpm: number) {
 }
 
 export default function ReportView(props: {
+  problem: Problem;
   report: Report | null;
   metrics: Metrics;
   decisions: Decision[];
@@ -72,6 +87,14 @@ export default function ReportView(props: {
     return q ? codeHistory.find((s) => s.code.includes(q))?.t ?? null : null;
   };
 
+  // When a quote was said: the start of the speech event that contains it.
+  const saidAt = (quote: string) => {
+    const q = norm(quote);
+    if (!q) return null;
+    const e = timeline.find((e) => e.type === "speech" && norm(e.text).includes(q));
+    return e?.type === "speech" ? e.start : null;
+  };
+
   // One redo target per unexplained decision, placed at the moment its line was written.
   const targets = useMemo(() => {
     const out: Record<string, RedoTarget> = {};
@@ -91,9 +114,21 @@ export default function ReportView(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [decisions, codeHistory, timeline, durationMs]);
 
-  const moments: Moment[] = Object.values(targets)
-    .map((x) => ({ key: x.key, t: x.t, label: x.description }))
+  const fixed = (id: string) => attempts[id]?.some((a) => a.explained);
+  const explained = decisions.filter((d) => d.explained || fixed(d.id)).length;
+
+  // Every decision as a pin on the replay. An explained one whose line cannot be found gets no pin.
+  const moments: Moment[] = decisions
+    .flatMap((d): Moment[] => {
+      const t = targets[d.id]?.t ?? writtenAt(d.code_quote);
+      if (t === null) return [];
+      return [{ key: d.id, t, label: d.description, state: d.explained || fixed(d.id) ? "explained" : d.said_quote ? "partial" : "never", redo: !!targets[d.id] }];
+    })
     .sort((a, b) => a.t - b.t);
+  const mismatches: Mismatch[] = (report?.said_vs_did || []).flatMap((x) => {
+    const t = saidAt(x.said);
+    return t === null ? [] : [{ t, label: x.note }];
+  });
 
   // "Redo from here": explain whatever was written in the 30s before the playhead.
   const redoAt = (t: number) => {
@@ -129,15 +164,12 @@ export default function ReportView(props: {
     });
   };
 
-  const fixed = (id: string) => attempts[id]?.some((a) => a.explained);
-  const explained = decisions.filter((d) => d.explained || fixed(d.id)).length;
-
   return (
     <div className="report">
       <header>
         <h1>Interview report</h1>
         <span className="muted">
-          Two Sum · {mode === "coach" ? "Coach" : "Interview"} mode · {Math.floor(m.sessionSeconds / 60)}m {m.sessionSeconds % 60}s
+          {props.problem.title} · {mode === "coach" ? "Coach" : "Interview"} mode · {Math.floor(m.sessionSeconds / 60)}m {m.sessionSeconds % 60}s
         </span>
         <span className="spacer" />
         <a href="/dashboard">Dashboard</a>
@@ -171,10 +203,57 @@ export default function ReportView(props: {
             </div>
           </div>
 
+          {report.said_vs_did?.length > 0 && (
+            <div className="box mismatch">
+              <h3>Said vs did</h3>
+              {report.said_vs_did.map((x, i) => {
+                const t = saidAt(x.said);
+                return (
+                  <div key={i} className="svd">
+                    <p>{x.note}</p>
+                    <div className="svd-pair">
+                      <Quote ev={{ source: "said", quote: x.said, verified: x.saidVerified }} />
+                      {x.did ? (
+                        <Quote ev={{ source: "wrote", quote: x.did, verified: x.didVerified }} />
+                      ) : (
+                        <div className="evidence">
+                          <span className="tag">You wrote</span>
+                          <span className="muted">Nothing in the code</span>
+                        </div>
+                      )}
+                    </div>
+                    {t !== null && (
+                      <button className="link" onClick={() => setSeek({ t, n: Date.now() })}>Jump to {clock(t)}</button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
           </>
       )}
 
       <h2>Replay <span className="muted">— scrub through what you said and wrote, and redo the moments you skipped</span></h2>
+      <div className="glance">
+        {decisions.length > 0 && (
+          <span><b>{explained} of {decisions.length}</b> decisions explained <Meter value={explained / decisions.length} /></span>
+        )}
+        {m.thinkAloudCoverage !== null && (
+          <span><b>{Math.round(m.thinkAloudCoverage * 100)}%</b> of your coding narrated <Meter value={m.thinkAloudCoverage} /></span>
+        )}
+      </div>
+      <div className={`milestones ${report?.milestones ? "" : "pending"}`}>
+        {MILESTONES.map(([key, label]) => {
+          const ms = report?.milestones?.[key];
+          const t = ms?.hit ? saidAt(ms.quote) : null;
+          if (t === null) return <span key={key} className={ms?.hit ? "hit" : ""} title={ms?.quote}>{ms?.hit ? "✓" : "–"} {label}</span>;
+          return (
+            <button key={key} className="hit" title={ms?.quote} onClick={() => setSeek({ t, n: Date.now() })}>
+              ✓ {label} <span className="timer">{clock(t)}</span>
+            </button>
+          );
+        })}
+      </div>
       <Replay
         timeline={timeline}
         codeHistory={codeHistory}
@@ -182,6 +261,7 @@ export default function ReportView(props: {
         audioUrl={props.audioUrl}
         audioOffsetMs={props.audioOffsetMs}
         moments={moments}
+        mismatches={mismatches}
         seek={seek}
         onRedoMoment={(key) => setTarget(targets[key])}
         onRedoAt={redoAt}
@@ -287,6 +367,7 @@ export default function ReportView(props: {
       {target && (
         <Redo
           key={target.key}
+          problemId={props.problem.id}
           target={target}
           attempts={attempts[target.key] || []}
           onResult={(r) => setAttempts((a) => ({ ...a, [target.key]: [...(a[target.key] || []), r] }))}

@@ -1,5 +1,5 @@
 import type { CodeSnapshot, Decision, RunResult, TimelineEvent } from "./types";
-import { problem } from "./problem";
+import { DEFAULT_PROBLEM as problem } from "./problem";
 
 // A canned session, loaded by /interview?demo, for working on the report and replay
 // without doing a live interview. There is no audio.
@@ -40,7 +40,7 @@ const timeline: TimelineEvent[] = [
   },
   { type: "speech", t: s(101), start: s(101), end: s(108), text: "uh because I need to find the other number first, basically if it's already in there I can return right away" },
   { type: "run", t: s(115), passed: 5, total: 5, summary: "5/5 tests passed" },
-  { type: "speech", t: s(118), start: s(118), end: s(123), text: "okay it passes all five so that's linear time and linear space" },
+  { type: "speech", t: s(118), start: s(118), end: s(123), text: "okay it passes all five so that's linear time and constant space" },
   { type: "interviewer", t: s(128), kind: "wrapup", text: "On line 6 you store the index as the value. What would change if the same number appeared twice in the array?" },
   { type: "speech", t: s(137), start: s(137), end: s(146), text: "um it would overwrite the earlier index, but I think that's fine because we check before we store" },
 ];
@@ -51,15 +51,17 @@ const decisions: Decision[] = [
   { id: "d3", description: "Looks up the complement before inserting the current number", code_quote: "if target - num in seen:", explained: false, said_quote: "because I need to find the other number first" },
 ];
 
+const py = (v: unknown) => JSON.stringify(v).replace(/,/g, ", ");
 const run: RunResult = {
   error: null,
   stdout: "",
   passed: 5,
   total: 5,
-  results: problem.tests.map(([nums, target, expected]) => ({
-    input: `nums = [${nums.join(", ")}], target = ${target}`,
-    expected: `[${expected.join(", ")}]`,
-    got: `[${expected.join(", ")}]`,
+  // written the way the Python harness prints them
+  results: problem.tests.map(({ args, expected }) => ({
+    input: problem.params.map((p, i) => `${p} = ${py(args[i])}`).join(", "),
+    expected: py(expected),
+    got: py(expected),
     ok: true,
   })),
 };

@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { chatJSON, REPORT_MODEL } from "@/lib/llm";
-import { REDO_SYSTEM } from "@/lib/prompts";
+import { redoSystem } from "@/lib/prompts";
+import { getProblem } from "@/lib/problem";
 import { numberLines } from "@/lib/format";
 
 // Grades a re-recorded explanation of one moment against the first attempt.
 export async function POST(req: Request) {
-  const { description, code_quote, code, firstSaid, retake } = await req.json();
+  const { problemId, description, code_quote, code, firstSaid, retake } = await req.json();
 
   const user = `ASKED TO EXPLAIN
 ${description}
@@ -23,7 +24,7 @@ RETAKE
 ${retake || "(nothing was said)"}`;
 
   try {
-    const r = await chatJSON<any>(REDO_SYSTEM, user, 0.2, REPORT_MODEL);
+    const r = await chatJSON<any>(redoSystem(getProblem(problemId)), user, 0.2, REPORT_MODEL);
     const text = (v: unknown): string =>
       v == null ? "" : typeof v === "object" ? Object.values(v).map(text).filter(Boolean).join(" ") : String(v);
     return NextResponse.json({

@@ -22,7 +22,7 @@ export default function Dashboard() {
       <SiteNav current="dashboard" />
       <main className="wrap dash">
         <h1>What do you want to practice?</h1>
-        <p>Pick an interview type. Each session ends with a report and a replay.</p>
+        <p>Pick an interview type. Each session ends with a report, a replay, and the moments worth redoing.</p>
 
         <div className="types">
           <a className="type open" href="/interview" style={{ textDecoration: "none", color: "inherit" }}>
@@ -34,7 +34,7 @@ export default function Dashboard() {
                 asks about the decisions you did not explain.
               </p>
               <div className="facts">
-                <span className="chip">Two Sum</span>
+                <span className="chip">3 problems</span>
                 <span className="chip">Python</span>
                 <span className="chip">5, 10 or 20 min</span>
                 <span className="chip">Interview or Coach mode</span>
