@@ -1,6 +1,6 @@
 # TrojanPreps (mock technical interview simulator): architecture
 
-Built for the AI@USC hackathon (https://ai-usc.devpost.com/). "TrojanPreps" is a working name; the interviewer is called Tommy (both in [lib/brand.ts](lib/brand.ts)).
+Built for the AI@USC hackathon (https://ai-usc.devpost.com/). The product is TrojanPreps and the interviewer is called Tommy (both in [lib/brand.ts](lib/brand.ts)).
 
 Routes: `/` is a static landing page, `/dashboard` a static dashboard (interview types; only Technical works; sample data), `/interview` is the app itself, and `/interview?demo` loads a canned session into the report. See [OPEN_ISSUES.md](OPEN_ISSUES.md) for what is untested or unfinished.
 
@@ -257,8 +257,10 @@ The report page has a **replay**: a scrubbable timeline of the session where cod
 | [app/interview/page.tsx](app/interview/page.tsx) | The interview room and all orchestration: triggers, consult queue, session start and end |
 | [app/globals.css](app/globals.css) | All styling. Colours are CSS custom properties on `:root` (light, the default) and `:root[data-theme="dark"]`; use the tokens, not hard-coded colours |
 | [app/layout.tsx](app/layout.tsx) | Fonts (`next/font/google`: Instrument Sans, JetBrains Mono) and an inline script that applies a saved dark theme before first paint |
+| [app/icon.png](app/icon.png), [app/apple-icon.png](app/apple-icon.png) | Favicon and home-screen icon: Tommy's orb (the `.orb` gradient from `globals.css`, rendered to PNG). Next serves them automatically by file name |
+| [docs/screenshots/](docs/screenshots/) | Screenshots of the live site used in README.md. Retake them if the UI changes noticeably |
 | [components/Theme.tsx](components/Theme.tsx) | `ThemeToggle` (sets `<html data-theme>`, saved in `localStorage` under `mock-interview-theme`), `useTheme()`, and `CodeEditor`, the Monaco wrapper whose theme follows the app theme |
-| [lib/brand.ts](lib/brand.ts) | Product name ("TrojanPreps", a working name), the tagline, the interviewer's name ("Tommy": shown in the UI, given to the model in the prompt, and said in the intro in `lib/problem.ts`), and `uscLogo` (the USC shield, `public/usc-shield.png`, a small copy of `public/usc-logo.png`) |
+| [lib/brand.ts](lib/brand.ts) | Product name ("TrojanPreps"), the tagline, the interviewer's name ("Tommy": shown in the UI, given to the model in the prompt, and said in the intro in `lib/problem.ts`), and `uscLogo` (the USC shield, `public/usc-shield.png`, a small copy of `public/usc-logo.png`) |
 | [components/Brand.tsx](components/Brand.tsx) | `BrandMark` (shield + name, left end of every top bar), `Tagline` chip ("For Trojans, by Trojans", landing hero only) and `SiteFoot` |
 | [components/SiteNav.tsx](components/SiteNav.tsx) | Top bar shared by the landing page and dashboard |
 | [app/page.tsx](app/page.tsx) | Static marketing page; links into `/interview` and `/dashboard`. Its sample timeline is hand-placed but uses the replay's classes, so change it when the replay's look changes |
