@@ -4,6 +4,7 @@ import { useChromeSpeech, type SpeechHandlers } from "./useChromeSpeech";
 
 // Words Deepgram should favor (keyterm prompting).
 const KEYTERMS = [
+  "Tommy", // the interviewer's name
   // the problem
   "Two Sum", "nums", "target", "indices", "index", "pair", "complement", "duplicates", "negative numbers", "edge case",
   // data structures and Python
@@ -114,10 +115,15 @@ export function useSpeechRecognition(handlers: SpeechHandlers, mutedRef: React.R
         if (msg.type === "Error") return console.warn("deepgram error", msg);
         if (msg.type !== "TurnInfo") return;
         // Every message carries all the words of the current turn so far.
+        // While the interviewer is speaking, pass them up: the candidate may be cutting in.
+        if (mutedRef.current && msg.words?.length) {
+          const t0 = t0Ref.current;
+          h.current.onOverlap?.(msg.words.map((w: Word) => ({ w: w.word, s: t0 + w.start * 1000 })));
+        }
         turn = (msg.words ?? []).filter((w: Word) => w.start >= cutoffRef.current);
         const text = turn.map((w) => w.word).join(" ");
         // Updates keep coming during silence with the same words; only new words are activity.
-        if (text && text !== heard) h.current.onActivity();
+        if (text && text !== heard) h.current.onActivity(text);
         heard = text;
         if (msg.event === "EndOfTurn") return flush();
         setInterim(text);
@@ -178,11 +184,16 @@ export function useSpeechRecognition(handlers: SpeechHandlers, mutedRef: React.R
     if (fallbackRef.current) chromeStop();
   }, [chromeStop]);
   // Call when unmuting because the candidate cut in: keep what they said just before.
-  const keepHeard = useCallback(() => {
-    const at = (Date.now() - t0Ref.current) / 1000;
-    cutoffRef.current = Math.max(muteFromRef.current, at - KEEP_ON_BARGE_S);
-    chromeKeepHeard();
-  }, [chromeKeepHeard]);
+  // `from` (a Date.now() value) is where their words began, when that is known.
+  const keepHeard = useCallback(
+    (from?: number) => {
+      const at = (Date.now() - t0Ref.current) / 1000;
+      const since = from === undefined ? at - KEEP_ON_BARGE_S : (from - t0Ref.current) / 1000;
+      cutoffRef.current = Math.max(muteFromRef.current, since);
+      chromeKeepHeard();
+    },
+    [chromeKeepHeard]
+  );
 
   // `turns`: onFinal means a finished turn (Deepgram), not just a pause (Chrome).
   if (fallback) return { ...chrome, turns: false, start, stop, keepHeard };

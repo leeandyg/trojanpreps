@@ -6,6 +6,7 @@ An **MVP** of a voice-driven mock technical interview web app, built for the AI@
 
 - Read [ARCHITECTURE.md](ARCHITECTURE.md) before changing behavior. Check [OPEN_ISSUES.md](OPEN_ISSUES.md) for known gaps before "fixing" something that is already known.
 - Scope is deliberately small: one problem (Two Sum), one language (Python), two modes (Interview, Coach), Chrome only.
+- Routes: `/` is a static landing page, `/dashboard` a static dashboard with sample data (other interview types are "Coming soon" placeholders), and `/interview` is the actual app. Only `/interview` does anything.
 
 ## Team
 
@@ -24,12 +25,13 @@ An **MVP** of a voice-driven mock technical interview web app, built for the AI@
 ## Rules
 
 - **Stay in scope.** Do not add problems, languages, persistence, or features beyond the request. Suggest them instead.
-- **Ask before adding dependencies.** Current stack: Next.js, React, Monaco, `openai` SDK, Pyodide (CDN), Deepgram (raw WebSocket, no SDK). Anything new needs a reason.
+- **Ask before adding dependencies.** Current stack: Next.js (fonts via the built-in `next/font/google`), React, Monaco, `openai` SDK, Pyodide (CDN), Deepgram (raw WebSocket, no SDK). Anything new needs a reason.
 - **Keys stay on the server.** All LLM and TTS calls go through `app/api/*`. Never read `LLM_*`, `TTS_*` or `STT_*` env vars in client code. Never commit `.env.local`.
 - **Server is stateless.** The browser holds session state and sends it on every call. Keep it that way.
 - **Guard rails live in the browser** (`probeAllowed`, dropping stale probes, mic muting). Do not move them into the prompt.
 - **Interviewer behavior is tuned in [lib/prompts.ts](lib/prompts.ts).** Describe the shape of a good reply; do not put literal example sentences in prompts, the model repeats them.
-- **Timing constants** live at the top of [app/page.tsx](app/page.tsx). Change them there, not inline.
+- **Styling is plain CSS in [app/globals.css](app/globals.css)** with colour tokens for light (default) and dark. Use the tokens, not hard-coded colours. Name, tagline, interviewer name and logo path live in [lib/brand.ts](lib/brand.ts).
+- **Timing constants** live at the top of [app/interview/page.tsx](app/interview/page.tsx). Change them there, not inline.
 - **Shared types** go in [lib/types.ts](lib/types.ts). Keep the LLM reply shape and the types in sync.
 - **Match existing style.** Small files, plain functions and hooks, light comments.
 

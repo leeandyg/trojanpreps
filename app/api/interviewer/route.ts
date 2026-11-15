@@ -7,6 +7,12 @@ import type { InterviewerReply } from "@/lib/types";
 export async function POST(req: Request) {
   const { mode, trigger, code, timeline, run, decisions, hintLevel, probeAllowed, answering, followupsLeft, secondsSinceEdit, minutesLeft, stage, elapsedMs } = await req.json();
 
+  // How the interviewer's last few lines began, so it can avoid opening the same way again.
+  const openings = (Array.isArray(timeline) ? timeline : [])
+    .filter((e: any) => e.type === "interviewer" && e.kind !== "intro" && e.heard !== "")
+    .slice(-3)
+    .map((e: any) => `"${String(e.text).split(/\s+/).slice(0, 5).join(" ")}..."`);
+
   const user = `TRIGGER: ${trigger}
 probe_allowed: ${probeAllowed}
 answering: ${!!answering}
@@ -16,6 +22,7 @@ seconds_since_last_edit: ${secondsSinceEdit ?? "unknown"}
 minutes_left: ${minutesLeft ?? "unknown"}
 stage: ${stage ?? "working"}
 now: ${typeof elapsedMs === "number" ? clock(elapsedMs) : "unknown"}
+your_recent_openings: ${openings.join(", ") || "(none yet)"}
 
 EDITOR
 ${numberLines(code)}
@@ -36,7 +43,7 @@ ${JSON.stringify(decisions)}`;
     const turn = (reply as any).turn;
     const silent = typeof reply.say !== "string" || !reply.say.trim();
     if (trigger === "speech" && silent && (turn === "handed_over" || turn === "question")) {
-      const nudge = `\n\nYou classified the candidate's latest speech as "${turn}" but left "say" empty. They have stopped and are waiting for you. Return the full JSON again with "say" filled in, following the rules for replying to "${turn}".`;
+      const nudge = `\n\nYou classified the candidate's latest speech as "${turn}" but left "say" empty. They have stopped and are waiting for you. Return the full JSON again with "say" filled in with one or two short spoken sentences, following the rules for replying to "${turn}".`;
       reply = await chatJSON<InterviewerReply>(interviewerSystem(mode), user + nudge).catch(() => reply);
     }
     return NextResponse.json({

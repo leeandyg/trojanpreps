@@ -7,7 +7,11 @@ export type SpeechHandlers = {
   // `info` is only given by Deepgram: per-word timings (Date.now() values), and endOfTurn = the
   // recognizer itself judged the candidate finished their turn (no extra silence wait needed).
   onFinal: (text: string, start: number, end: number, info?: { words: SpokenWord[]; endOfTurn: boolean }) => void;
-  onActivity: () => void; // fires whenever the candidate is heard, before any onFinal from the same event
+  // Fires whenever the candidate is heard, before any onFinal from the same event. `text` is what was heard.
+  onActivity: (text: string) => void;
+  // Words recognised while muted, i.e. while the interviewer's voice is playing (`s` is a Date.now()
+  // value). They may be the candidate cutting in, or the interviewer's own voice from the speakers.
+  onOverlap?: (words: { w: string; s: number }[]) => void;
 };
 
 // Fallback speech-to-text (Chrome Web Speech API), used when Deepgram is unavailable.
@@ -38,7 +42,13 @@ export function useChromeSpeech(handlers: SpeechHandlers, mutedRef: React.RefObj
     rec.lang = "en-US";
     rec.onresult = (e: any) => {
       if (mutedRef.current) {
-        for (let i = e.resultIndex; i < e.results.length; i++) taintedRef.current.add(i);
+        const over: { w: string; s: number }[] = [];
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          taintedRef.current.add(i);
+          for (const w of e.results[i][0].transcript.trim().split(/\s+/)) if (w) over.push({ w, s: Date.now() });
+        }
+        if (over.length) h.current.onOverlap?.(over);
+        if (!mutedRef.current) return; // that was the candidate cutting in: the caller unmuted and kept it
         startRef.current = null;
         setInterim("");
         return;
@@ -50,7 +60,7 @@ export function useChromeSpeech(handlers: SpeechHandlers, mutedRef: React.RefObj
         if (text) heard.push({ text, final: e.results[i].isFinal });
       }
       if (!heard.length) return;
-      h.current.onActivity();
+      h.current.onActivity(heard.map((r) => r.text).join(" "));
       let pending = "";
       for (const r of heard) {
         if (startRef.current === null) startRef.current = Date.now();

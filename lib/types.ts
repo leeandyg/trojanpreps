@@ -13,7 +13,9 @@ export type Grounding = { code_quote: string; said_quote: string };
 export type TimelineEvent =
   | { type: "speech"; t: number; start: number; end: number; text: string; typed?: boolean }
   // audioUrl is a browser blob URL of the spoken line, kept so the replay can play it back
-  | { type: "interviewer"; t: number; text: string; kind: string; grounding?: Grounding; audioUrl?: string; interrupted?: boolean }
+  // interrupted: the candidate cut the line off. heard: the part of it that was spoken before that (an estimate);
+  // "" means none of it was (the candidate was already talking when the audio was ready).
+  | { type: "interviewer"; t: number; text: string; kind: string; grounding?: Grounding; audioUrl?: string; interrupted?: boolean; heard?: string }
   | { type: "run"; t: number; passed: number; total: number; summary: string };
 
 // The editor contents after each edit, for replay.

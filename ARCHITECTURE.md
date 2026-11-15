@@ -1,6 +1,8 @@
-# Mock technical interview simulator: architecture
+# TrojanPreps (mock technical interview simulator): architecture
 
-Built for the AI@USC hackathon (https://ai-usc.devpost.com/). See [OPEN_ISSUES.md](OPEN_ISSUES.md) for what is untested or unfinished.
+Built for the AI@USC hackathon (https://ai-usc.devpost.com/). "TrojanPreps" is a working name; the interviewer is called Tommy (both in [lib/brand.ts](lib/brand.ts)).
+
+Routes: `/` is a static landing page, `/dashboard` a static dashboard (interview types; only Technical works; sample data), `/interview` is the app itself, and `/interview?demo` loads a canned session into the report. See [OPEN_ISSUES.md](OPEN_ISSUES.md) for what is untested or unfinished.
 
 ## What it is and why
 
@@ -8,7 +10,7 @@ The hardest part of going from LeetCode to real interviews is explaining your th
 
 What makes it different from "mock interview with ChatGPT":
 
-- The interviewer hears the candidate **and** sees the live editor, and asks follow-ups that depend on both. Example from a real test run: *"Earlier you said you would store the numbers as you go, but on line 4 you are checking the complement before inserting on line 6. Why do the lookup before storing?"*
+- The interviewer hears the candidate **and** sees the live editor, and asks follow-ups that depend on both. Example of the kind of question: *"On line 4 you're checking for the complement before line 6 stores the number. Why that order?"* (the wording varies from probe to probe on purpose).
 - It knows when to stay quiet. Thinking aloud and pauses get no response.
 - The end report quotes what the candidate actually said and wrote, and measures delivery (pace, fillers, how much of the coding was narrated).
 
@@ -19,7 +21,7 @@ Scope is deliberately small: one problem (Two Sum), one language (Python), two m
 ```
 cp .env.example .env.local    # then fill in the two keys
 npm install
-npm run dev                   # open http://localhost:3000 in Chrome
+npm run dev                   # open http://localhost:3000 in Chrome (landing page; the interview is at /interview)
 ```
 
 | Variable | Purpose |
@@ -54,7 +56,7 @@ Chrome is the supported browser (Deepgram streaming works anywhere with `MediaRe
 ## How a session flows
 
 ```
-Browser (app/page.tsx)                                Server (app/api/*)
+Browser (app/interview/page.tsx)                                Server (app/api/*)
 ──────────────────────                                ──────────────────
 mic ──► useSpeechRecognition ──► timeline (speech)
 editor ──► code + edit timestamps
@@ -90,7 +92,7 @@ Most calls follow something the candidate did. Two are on a clock: time checks, 
 
 The opening line is fixed text (`problem.intro`), not an LLM call. The time-check fallback lines are fixed text too.
 
-Only one consult runs at a time; a trigger that arrives meanwhile is queued (latest wins, except `wrapup` beats `time`, which beats the rest). Every consult also sends `minutesLeft`, `elapsedMs`, `secondsSinceEdit` and `stage`. The timing constants are at the top of [app/page.tsx](app/page.tsx).
+Only one consult runs at a time; a trigger that arrives meanwhile is queued (latest wins, except `wrapup` beats `time`, which beats the rest). Every consult also sends `minutesLeft`, `elapsedMs`, `secondsSinceEdit` and `stage`. The timing constants are at the top of [app/interview/page.tsx](app/interview/page.tsx).
 
 ### When the candidate hands over the floor
 
@@ -103,6 +105,22 @@ The reply responds to what they said and stays neutral about correctness unless 
 ### Personality
 
 The prompt asks for an engaged, warm colleague: short reactions tied to what the candidate actually did, never generic praise and not on every turn. Coach may confirm that something is right and show interest in a clever approach (including a brief reaction when all tests pass). Interview may be warm but never signals right or wrong.
+
+### Sounding like a person
+
+The "HOW YOU SOUND" section of the prompt describes spoken style rather than giving sentences to copy: one or two breath-length sentences with contractions, nothing a voice reads badly (lists, parentheses, quotation marks, code symbols), no repeating back what the candidate just said, no assistant phrases or reflex praise, a short human answer to call talk ("can you hear me?", "say that again?", which gets a simpler rewording), and asking again when the transcript is too garbled to read.
+
+**Openers vary.** The interviewer used to open most probes with the same words because the prompt spelled out a sentence template for probes; the model copied it. The template is gone: the prompt now lists the ways a probe can be built (lead with the line number, the construct, the topic, or the question itself) and says each must differ from the last, and that coming back to something already raised must sound like coming back to it. To make that stick with a small model, [app/api/interviewer/route.ts](app/api/interviewer/route.ts) adds `your_recent_openings` to each request: the first five words of the interviewer's last three spoken lines, which the prompt tells it not to reuse.
+
+### What the interviewer remembers, and picking up after an interruption
+
+There is no server memory. The interviewer's memory is the timeline the browser sends on every consult: everything the candidate said, every line the interviewer said (with its kind), and every test run.
+
+When the candidate cuts a line off, the browser records how much of it was spoken: `heard` on the timeline event, from `tts.spokenSoFar()` in [hooks/useTTS.ts](hooks/useTTS.ts). It is an estimate, cut at a word: playback position as a share of the clip once the clip has fully downloaded, playback seconds times `CHARS_PER_SEC` (15) before that, and the last word boundary for the browser voice. A reply that was never played because the candidate was already talking gets `heard: ""`.
+
+[lib/format.ts](lib/format.ts) shows the model the heard part, then the cut, then the part marked NOT HEARD (or the whole line marked NEVER SPOKEN). The "WHEN YOU WERE CUT OFF" section of the prompt says unheard words count as unsaid; that a cut-in is answered on its own terms; and that "sorry, go on" or "what were you saying?" gets the unheard part, without restarting the line and without adding the answer to its own question.
+
+In the browser ([app/interview/page.tsx](app/interview/page.tsx), `consult`): a reply that finishes a cut-off line keeps that line's kind and is not subject to the probe cooldown or follow-up limit (`resuming`; a question right after a cut-off question counts even if the model labels it `other`). Lines that were never spoken are ignored when working out `answering`, `stage` and the follow-up count, and do not use up the probe cooldown.
 
 ### Session clock, time checks and cutting in
 
@@ -140,8 +158,12 @@ Still turn-based underneath (speech-to-text, then the model, then a voice), with
 
 - **Streaming voice.** `/api/tts` uses ElevenLabs' streaming endpoint and `useTTS` plays the audio as bytes arrive (through `MediaSource`), so the interviewer starts speaking after about 0.3s instead of after the whole clip downloads.
 - **Mute starts when sound starts.** The mic is muted from the moment audio actually plays, not from when the audio is requested, and the barge-in grace period counts from then too.
-- **Barge-in.** The mic's loudness is watched during the session ([hooks/voiceActivity.ts](hooks/voiceActivity.ts)) on a stream with echo cancellation. If the candidate talks over the interviewer (louder than `BARGE_RMS` for `BARGE_HOLD_MS`), the interviewer's audio stops at once, the mic is unmuted, and the line is marked `interrupted` so the model knows it was cut off.
-- **Backchannels.** Two neutral clips ("Okay.", "I see.") are fetched once after the intro; nothing that sounds like agreement, since the reasoning may be wrong. One plays when a `speech` consult comes back silent after a spoken thought of 15 or more words that is not a question, at most every 35s. They are not logged in the transcript and are skipped when the browser voice is in use.
+- **Barge-in** uses two signals while the interviewer is speaking:
+  - *Loudness* (fast, about 0.25s): the mic level is watched ([hooks/voiceActivity.ts](hooks/voiceActivity.ts)) on a stream with echo cancellation. Enough loudness above `BARGE_RMS` (`BARGE_HOLD_MS`; quiet gaps between syllables drain the count rather than reset it) **pauses** the line mid-word and opens the mic (`holdLine`). If real words arrive within `BARGE_CONFIRM_MS` (1.2s) the line is cut off; otherwise it was a cough or the keyboard and the line resumes from the same spot. After `BARGE_MAX_HOLDS` false pauses on one line, loudness is ignored for the rest of it.
+  - *Words* (reliable, about 0.5s): the recognizer keeps listening while the mic is "muted" and reports what it hears (`onOverlap`). A word spoken after the grace period cuts the line off (`bargeIn`) unless it is a listening noise (`LISTENING_WORDS`: "yeah", "mhm", ...) or a word from the line being spoken (the interviewer's own voice from the speakers).
+  - Cutting off stops the audio, unmutes the mic, keeps the candidate's words from where they began, and marks the line `interrupted` with the part that was `heard`, so the model knows what was and was not said (see "What the interviewer remembers").
+  - If the candidate starts talking while a reply's audio is still loading, the reply is not played (marked `interrupted`, `heard: ""`). Time checks and check-ins are spoken anyway.
+- **Backchannels.** Three neutral clips ("Okay.", "I see.", "Got it.") are fetched once after the intro; nothing that sounds like agreement, since the reasoning may be wrong. One plays when a `speech` consult comes back silent after a spoken thought of 15 or more words that is not a question, at most every 35s. They are not logged in the transcript and are skipped when the browser voice is in use.
 - **Thinking sounds.** Two clips ("Hmm.", "Let's see.") fetched the same way. If the candidate is waiting on an answer (they asked a question or answered one) and the model has not replied after 1.2s (`THINKING_AFTER_MS`), one plays, at most every 30s; the spoken reply waits for it to finish.
 - **End-of-turn detection.** With Deepgram the consult starts 0.3s after the recognizer says the turn is over, and new speech cancels a pending consult. On the Chrome fallback the old silence timers apply (1.5s, or 0.6s for something that looks like a question, `looksLikeQuestion`).
 
@@ -165,7 +187,7 @@ The browser sends the ledger back on the next call. Probes may only target a dec
 - Model calls time out after 15s; `speech` and `wrapup` consults retry once. If an answer to the interviewer's question still gets no reply, a fixed "say that again?" line is spoken.
 - The code is only marked as "looked at" after a `code` consult or a spoken probe, so a passing remark does not use up new lines before they can be probed.
 - After End, nothing can speak or consult (`endedRef`).
-- A barge-in with no words following within 1.8s is treated as noise and the line is said again, once.
+- Loudness alone never ends a line: it pauses it, and with no real words within 1.2s the line carries on. A "yeah" during the pause is not sent to the model as a turn.
 - Whatever the recognizer started hearing while the interviewer was speaking is discarded even after the mic reopens, except on a barge-in.
 - Interview mode never sends `code` or `run` triggers at all.
 - Mic results are discarded while the interviewer's audio is playing, plus 400ms, so it does not transcribe itself. A barge-in ends that immediately.
@@ -183,7 +205,7 @@ Computed locally in [lib/metrics.ts](lib/metrics.ts), no LLM involved:
 - **Think-aloud coverage**: share of editor keystrokes that had speech within 6 seconds.
 - **Longest silent coding stretch**: longest run of un-narrated edits with gaps under 15 seconds.
 
-From Deepgram's word timings (hidden on the report when there are none: Chrome fallback, typed input, `/?demo`):
+From Deepgram's word timings (hidden on the report when there are none: Chrome fallback, typed input, `/interview?demo`):
 
 - **Mid-sentence pauses**: gaps of 1.5s or more between words inside one turn, and the longest.
 - **Pace range**: slowest and fastest turn of 8 or more words, with when they happened.
@@ -217,18 +239,26 @@ The report page has a **replay**: a scrubbable timeline of the session where cod
 
 **Redo the moment.** Each unexplained decision becomes a redo target placed at the time its line first appeared in the editor. The candidate sees the code as it was then (line highlighted) and what they said within 30s of it, records up to 45s re-explaining it, and `/api/redo` grades the retake against the first attempt: explained or not, a 1 to 4 score, what improved (quoting the retake), what is still missing, and a model answer shown only after an attempt. A passing retake marks the decision "Explained on your retake" in the ledger. Entry points: the ⚑ moments under the timeline, the ledger, the report's "Missed explanation" box, and "Redo from here" at any playhead position (targets whatever was written in the previous 30s).
 
-**Demo data:** opening `/?demo` loads a canned session ([lib/demoSession.ts](lib/demoSession.ts)) straight into the report, without audio. Use it to work on the report, replay and redo without doing an interview.
+**Demo data:** opening `/interview?demo` loads a canned session ([lib/demoSession.ts](lib/demoSession.ts)) straight into the report, without audio. Use it to work on the report, replay and redo without doing an interview.
 
 ## File map
 
 | Path | What it does |
 |---|---|
-| [app/page.tsx](app/page.tsx) | The interview room and all orchestration: triggers, consult queue, session start and end |
+| [app/interview/page.tsx](app/interview/page.tsx) | The interview room and all orchestration: triggers, consult queue, session start and end |
+| [app/globals.css](app/globals.css) | All styling. Colours are CSS custom properties on `:root` (light, the default) and `:root[data-theme="dark"]`; use the tokens, not hard-coded colours |
+| [app/layout.tsx](app/layout.tsx) | Fonts (`next/font/google`: Instrument Sans, JetBrains Mono) and an inline script that applies a saved dark theme before first paint |
+| [components/Theme.tsx](components/Theme.tsx) | `ThemeToggle` (sets `<html data-theme>`, saved in `localStorage` under `mock-interview-theme`), `useTheme()`, and `CodeEditor`, the Monaco wrapper whose theme follows the app theme |
+| [lib/brand.ts](lib/brand.ts) | Product name ("TrojanPreps", a working name), the tagline, the interviewer's name ("Tommy": shown in the UI, given to the model in the prompt, and said in the intro in `lib/problem.ts`), and `uscLogo` (the USC shield, `public/usc-shield.png`, a small copy of `public/usc-logo.png`) |
+| [components/Brand.tsx](components/Brand.tsx) | `BrandMark` (shield + name, left end of every top bar), `Tagline` chip ("For Trojans, by Trojans", landing hero only) and `SiteFoot` |
+| [components/SiteNav.tsx](components/SiteNav.tsx) | Top bar shared by the landing page and dashboard |
+| [app/page.tsx](app/page.tsx) | Static marketing page; links into `/interview` and `/dashboard` |
+| [app/dashboard/page.tsx](app/dashboard/page.tsx) | Static dashboard: interview types (only Technical works, the rest are "Coming soon") and a session table that is labelled sample data. Nothing is stored or fetched |
 | [components/Report.tsx](components/Report.tsx) | Report page; builds the redo targets from the ledger and code history |
 | [components/Replay.tsx](components/Replay.tsx) | Scrubbable session timeline with synced code, transcript and audio |
 | [components/Redo.tsx](components/Redo.tsx) | Re-record and grade one moment |
 | [app/api/redo/route.ts](app/api/redo/route.ts) | Grades a retake against the first attempt |
-| [lib/demoSession.ts](lib/demoSession.ts) | Canned session for `/?demo` |
+| [lib/demoSession.ts](lib/demoSession.ts) | Canned session for `/interview?demo` |
 | [app/api/interviewer/route.ts](app/api/interviewer/route.ts) | Builds the interviewer prompt, calls the LLM, normalizes the reply |
 | [app/api/report/route.ts](app/api/report/route.ts) | Builds the report prompt, calls the LLM, verifies quotes |
 | [app/api/stt-token/route.ts](app/api/stt-token/route.ts) | Mints a 60s Deepgram token from `STT_API_KEY`; a non-200 response tells the client to use Chrome's recognizer |
@@ -237,28 +267,28 @@ The report page has a **replay**: a scrubbable timeline of the session where cod
 | [lib/problem.ts](lib/problem.ts) | Two Sum: statement, starter code, tests, spoken intro, and interviewer-only notes (clarification answers, decisions worth explaining, edge cases) |
 | [lib/types.ts](lib/types.ts) | Shared types: `TimelineEvent`, `Decision`, `InterviewerReply`, `Metrics`, `Report` |
 | [lib/metrics.ts](lib/metrics.ts) | Delivery metrics |
-| [lib/format.ts](lib/format.ts) | Turns the timeline into the transcript the LLM reads; numbers code lines |
+| [lib/format.ts](lib/format.ts) | Turns the timeline into the transcript the LLM reads (including what was heard of a cut-off line); numbers code lines |
 | [lib/llm.ts](lib/llm.ts) | `chatJSON()`: one LLM call in JSON mode, with optional model override and fallback to the fast model |
-| [hooks/useSpeechRecognition.ts](hooks/useSpeechRecognition.ts) | Deepgram Flux streaming speech-to-text: own echo-cancelled mic stream sent via `MediaRecorder` over a WebSocket, one `onFinal` per finished turn with word timings, reconnects on drop. Words spoken while muted are dropped by audio timestamp; `keepHeard()` keeps the last 1.5s on a barge-in. Returns `turns` (false on the Chrome fallback) |
+| [hooks/useSpeechRecognition.ts](hooks/useSpeechRecognition.ts) | Deepgram Flux streaming speech-to-text: own echo-cancelled mic stream sent via `MediaRecorder` over a WebSocket, one `onFinal` per finished turn with word timings, reconnects on drop. Words spoken while muted are dropped by audio timestamp; `keepHeard()` keeps the last 1.5s on a barge-in (or from a given time); `onOverlap` reports words heard while muted. Returns `turns` (false on the Chrome fallback) |
 | [hooks/useChromeSpeech.ts](hooks/useChromeSpeech.ts) | Fallback: continuous Chrome Web Speech API with auto-restart and muting |
-| [hooks/useTTS.ts](hooks/useTTS.ts) | `speak(text, onStart)` streams and plays a line, resolving when it finishes, is stopped, or times out, and returns the audio blob URL for replay; `stop()` cuts it off; `preload(text)` fetches a clip; falls back to browser voice |
+| [hooks/useTTS.ts](hooks/useTTS.ts) | `speak(text, onStart)` streams and plays a line, resolving when it finishes, is stopped, or times out, and returns the audio blob URL for replay; `stop()` cuts it off; `pause()`/`resume()` hold it; `spokenSoFar()` estimates the part of the current line already spoken; `preload(text)` fetches a clip; falls back to browser voice |
 | [hooks/voiceActivity.ts](hooks/voiceActivity.ts) | Mic loudness watcher used for barge-in |
 | [hooks/usePyodide.ts](hooks/usePyodide.ts) | Loads Pyodide and runs the code against the tests |
 
 ## Common changes
 
-- **Interviewer too chatty, too quiet, or too generic:** edit [lib/prompts.ts](lib/prompts.ts). Avoid putting literal example sentences in the prompt; the model repeats them word for word. Describe the shape instead.
-- **Timing of probes:** `SPEECH_SETTLE_MS`, `CODE_SETTLE_MS`, `PROBE_COOLDOWN_MS` in [app/page.tsx](app/page.tsx).
-- **Interviewer cuts out when it shouldn't, or can't be interrupted:** `BARGE_RMS`, `BARGE_HOLD_MS`, `BARGE_GRACE_MS` in [app/page.tsx](app/page.tsx). Raise `BARGE_RMS` if it interrupts itself on speakers.
+- **Interviewer too chatty, too quiet, too generic, or stiff:** edit [lib/prompts.ts](lib/prompts.ts) ("HOW YOU SOUND" for style). Avoid putting literal example sentences in the prompt; the model repeats them word for word. Describe the shape instead.
+- **Timing of probes:** `SPEECH_SETTLE_MS`, `CODE_SETTLE_MS`, `PROBE_COOLDOWN_MS` in [app/interview/page.tsx](app/interview/page.tsx).
+- **Interviewer cuts out when it shouldn't, or can't be interrupted:** `BARGE_RMS`, `BARGE_HOLD_MS`, `BARGE_GRACE_MS`, `BARGE_CONFIRM_MS`, `LISTENING_WORDS` in [app/interview/page.tsx](app/interview/page.tsx). Raise `BARGE_RMS` if it keeps pausing itself on speakers; lower it if it only stops after a delay (that is the word signal doing the work alone).
 - **Too many or too few backchannels or thinking sounds:** the `BACKCHANNEL_*` and `THINKING_*` constants in the same place.
-- **Turn detection too eager or too slow:** `eot_threshold` and `eot_timeout_ms` at the top of [hooks/useSpeechRecognition.ts](hooks/useSpeechRecognition.ts), and `TURN_SETTLE_MS` in [app/page.tsx](app/page.tsx).
-- **Session length, time checks, check-ins:** `SESSION_MINUTES`, `TIME_CHECKS_MIN`, `CHECKIN_MS`, `INTERRUPT_*` in [app/page.tsx](app/page.tsx).
+- **Turn detection too eager or too slow:** `eot_threshold` and `eot_timeout_ms` at the top of [hooks/useSpeechRecognition.ts](hooks/useSpeechRecognition.ts), and `TURN_SETTLE_MS` in [app/interview/page.tsx](app/interview/page.tsx).
+- **Session length, time checks, check-ins:** `SESSION_MINUTES`, `TIME_CHECKS_MIN`, `CHECKIN_MS`, `INTERRUPT_*` in [app/interview/page.tsx](app/interview/page.tsx).
 - **Different or additional problem:** add an object like the one in [lib/problem.ts](lib/problem.ts). The test harness in `usePyodide` assumes a `(nums, target)` signature and order-insensitive comparison, so it needs generalizing for other problems.
 - **Different LLM:** change the three `LLM_*` variables. The provider must support `response_format: { type: "json_object" }`.
 
 ## Demo script
 
-1. Start in Coach mode (pick a session length; 10 minutes is the default). The interviewer greets you, reads the problem and asks if you have questions.
+1. Open `/` (landing), go to the dashboard, and pick Technical interview (or open `/interview` directly). Start in Coach mode (pick a session length; 10 minutes is the default). The interviewer greets you, reads the problem and asks if you have questions.
 2. Ask "can there be duplicates?" and get a direct answer.
 3. Say "I'll use a hash map to store numbers as I go", then write the loop silently. A few seconds after you stop typing, the interviewer asks about lookup-before-insert, and the "Why I asked" chip shows the line and your quote.
 4. Trail off mid-thought while typing: the interviewer stays silent. Finish a thought (a reason or a plan) and wait: it replies briefly.

@@ -1,7 +1,7 @@
 import type { CodeSnapshot, Decision, RunResult, TimelineEvent } from "./types";
 import { problem } from "./problem";
 
-// A canned session, loaded by /?demo, for working on the report and replay
+// A canned session, loaded by /interview?demo, for working on the report and replay
 // without doing a live interview. There is no audio.
 const s = (sec: number) => sec * 1000;
 

@@ -18,7 +18,7 @@ The API routes were tested with simulated requests against the real Gemini and E
 
 The `/api/redo` grader and the report on `gemini-3.8-flash` were tested with simulated requests. The UI below compiles but has not been seen running:
 
-- **Replay timeline rendering and seeking**, including lane alignment and the playhead. `/?demo` loads a canned session to check this without a mic.
+- **Replay timeline rendering and seeking**, including lane alignment and the playhead. `/interview?demo` loads a canned session to check this without a mic.
 - **Session audio recording and synced playback.** Chrome reports recorded audio as endless until it is seeked once; there is a workaround in `Replay.tsx` that needs checking. Audio and the replay clock may drift on long sessions.
 - **Mic recording alongside speech recognition.** Three things open the mic now (session recording, barge-in watcher, Deepgram stream); this normally works in Chrome but is unconfirmed here.
 - **Interviewer lines replaying** at the right moments, and at 1.5× and 2×.
@@ -29,7 +29,16 @@ The `/api/redo` grader and the report on `gemini-3.8-flash` were tested with sim
 `/api/tts` streaming was measured from the terminal (first audio byte in about 0.35s). The rest needs ears:
 
 - **Streamed playback through `MediaSource`** in `useTTS`, and that the saved blob still replays.
-- **Barge-in threshold.** `BARGE_RMS = 0.045` is a guess. Too low and the interviewer cuts itself off on speakers or on keyboard noise; too high and you have to shout. Tune with real hardware.
+- **Barge-in threshold.** `BARGE_RMS = 0.045` is a guess. Too low and the interviewer pauses itself on speakers or on keyboard noise; too high and only the slower word signal interrupts. Tune with real hardware.
+- **Barge-in rework (2026-11-14), untested in a browser.** Loudness now pauses the line and words confirm; recognised words alone also cut in (see ARCHITECTURE "Barge-in"). To check by ear: that talking over the interviewer stops it within about half a second; that a cough pauses for 1.2s and then resumes from the same spot (pause/resume of the streamed `MediaSource` audio); that "yeah"/"mhm" do not take the floor; on speakers, that the interviewer's own voice neither cuts it off nor lands in the transcript after a cut-in. A cut-in made only of words that also occur in the interviewer's line is not recognised as one. Pause/resume of the browser fallback voice is known to be flaky in Chrome.
+- **A reply dropped because the candidate resumed talking while its audio loaded** still shows in the on-screen transcript and the report's transcript though it was never heard. The model is now told it was never spoken, and it no longer counts as a question asked or uses the probe cooldown; the "Why I asked" chip can still show for it.
+- **Interviewer memory and "go on" after an interruption (2026-11-14).** Checked with simulated requests only (hand-written `heard` values): asked to continue, the interviewer says the unheard part instead of restarting. Not checked in a browser: whether `heard` lands near the real cut-off. It is an estimate (15 characters a second until the clip has fully downloaded, then a share of its length), and the word signal fires about half a second after the candidate starts, so it can run a few words long. Tune `CHARS_PER_SEC` in `hooks/useTTS.ts` if the interviewer skips or repeats words when it resumes. Before the prompt was tightened, one resumed probe gave away the answer to its own question, and a cut-off wrap-up question was skipped in favour of the closing question; neither recurred in two runs each after the fix, which is a small sample.
+- **Resumed lines do not always keep their kind.** The model sometimes labels the finished question `other`; the browser treats a question right after a cut-off question as that question (`resuming` in `consult`). A statement that ends in a question mark in reply to a cut-in would be mislabelled the same way.
+- **"Say that again?" comes back as `clarification`**, so the repeated question is no longer the latest question and the candidate's answer to it is not sent as `answering`. It usually still gets a reply through the hand-over rule.
+- **Varied openers (2026-11-14).** In simulated runs no probe opened with the old template, and a second probe opened differently from the first. Seen instead: probes that go straight to the question without mentioning what the candidate said earlier (the quote still shows in the "Why I asked" chip), follow-ups that begin by saying the answer only described the code, and one probe that asked what a line stores rather than why. Listen for a new favourite opener over a full session.
+- **Ledger sometimes comes back empty** on replies to a direct question or call talk (seen in simulation), which blanks the on-screen ledger until the next consult rebuilds it. Not confirmed whether this predates the prompt changes.
+- **The prompt grew** by roughly 400 words for the speaking-style and cut-off sections. Simulated calls took 0.9 to 1.5s (1.9s with the second ask); watch latency by ear.
+- **New backchannel clip "Got it."** has not been heard; drop it from `BACKCHANNELS` if it sounds like agreement.
 - **Speech recognition accuracy** was the main remaining problem with Chrome. Switched to Deepgram (now the Flux model) with a keyterm list (`KEYTERMS` in `hooks/useSpeechRecognition.ts`); whether it actually does better on CS terms is not yet checked.
 - **Barge-in on speakers.** The Deepgram stream now uses an echo-cancelled mic, and on a barge-in only the last 1.5s of muted audio is kept, so the interviewer's own words should rarely leak in. Still true on the Chrome fallback.
 - **Backchannel timing and frequency**, and whether a backchannel on speakers gets transcribed as candidate speech.
@@ -53,10 +62,16 @@ These were found by reading the code after the live voice felt inconsistent, and
 - Coach probes never arriving when the candidate said a word or two after writing code.
 - Mic muted during the audio request, dropping words said in that gap.
 - A stalled voice stream leaving the interviewer stuck on "Speaking" with the mic muted.
-- A cough cutting the interviewer off and leaving silence.
+- A cough cutting the interviewer off and leaving silence (now: pause, then resume).
 - No reply after the candidate answered a probe; now acknowledges or follows up.
 - Transcript split into fragments at every small pause; now merged.
 - Report page crashing when the model returned an object where text was expected; all model output is now coerced to the expected shape on the server.
+
+### Branding (2026-11-14)
+
+- **Name is a working name** ("TrojanPreps", in `lib/brand.ts`).
+- **USC shield in the top bars** (`public/usc-shield.png`). Check USC's identity rules before a public launch. On the dark theme the cardinal lines sit on navy; only glanced at.
+- **Colours settled:** indigo UI with cardinal and gold in the mesh (orb, washes). The orb's listening/thinking state colours hue-shift that mesh and have not been looked at live.
 
 ## Known problems
 
@@ -75,7 +90,7 @@ These were found by reading the code after the live voice felt inconsistent, and
 - **Interviewer audio is missing from the replay when the browser voice was used** (no blob to replay), and the mic recording will contain the interviewer's voice if speakers were used, so it can play twice.
 - **Redo targets depend on the ledger's `code_quote` matching the code exactly.** If the model's quote does not appear in any snapshot, the moment is placed at the end of the session.
 - **Replay holds every keystroke's full code in memory.** Fine for a 10-minute session; not for long ones.
-- **`/?demo` calls the report API on every load** (twice in development).
+- **`/interview?demo` calls the report API on every load** (twice in development).
 
 ## Not built
 

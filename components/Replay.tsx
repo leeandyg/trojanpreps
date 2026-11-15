@@ -1,6 +1,7 @@
 "use client";
+import { BRAND } from "@/lib/brand";
 import { useEffect, useMemo, useRef, useState } from "react";
-import Editor from "@monaco-editor/react";
+import { CodeEditor } from "./Theme";
 import { clock } from "@/lib/format";
 import { silentRuns } from "@/lib/metrics";
 import type { CodeSnapshot, TimelineEvent } from "@/lib/types";
@@ -171,7 +172,7 @@ export default function Replay(props: {
           ))}
         </div>
         <div className="lane">
-          <span className="lane-name">Interviewer</span>
+          <span className="lane-name">{BRAND.interviewer}</span>
           {timeline.map((e, i) => e.type === "interviewer" && (
             <i key={i} className={`seg ai ${e.kind}`} title={e.text} style={{ left: pct(e.t), width: pct(Math.max(1500, e.text.split(/\s+/).length * 380)) }} />
           ))}
@@ -195,7 +196,7 @@ export default function Replay(props: {
       </div>
       <div className="legend muted small">
         <span><i className="seg you" /> you talking</span>
-        <span><i className="seg ai" /> interviewer</span>
+        <span><i className="seg ai" /> {BRAND.interviewer}</span>
         <span><i className="seg ai probe" /> probe</span>
         <span><i className="seg typing" /> typing</span>
         <span><i className="seg silent" /> typing in silence</span>
@@ -217,9 +218,8 @@ export default function Replay(props: {
 
       <div className="replay-body">
         <div className="replay-code">
-          <Editor
+          <CodeEditor
             language="python"
-            theme="vs-dark"
             value={snapshotAt(codeHistory, t)}
             options={{ readOnly: true, fontSize: 14, minimap: { enabled: false }, scrollBeyondLastLine: false, automaticLayout: true, domReadOnly: true }}
           />
@@ -233,7 +233,7 @@ export default function Replay(props: {
               onClick={() => seekTo(startOf(e))}
             >
               <span className="muted">{clock(startOf(e))}</span>{" "}
-              {e.type === "run" ? <i>Ran code: {e.summary}</i> : <><b>{e.type === "speech" ? "You" : "Interviewer"}</b> {e.text}</>}
+              {e.type === "run" ? <i>Ran code: {e.summary}</i> : <><b>{e.type === "speech" ? "You" : BRAND.interviewer}</b> {e.text}</>}
             </div>
           ))}
         </div>

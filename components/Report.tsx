@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { clock } from "@/lib/format";
 import Replay, { snapshotAt, type Moment } from "./Replay";
 import Redo from "./Redo";
+import { ThemeToggle } from "./Theme";
 import type {
   CodeSnapshot, Decision, Evidence, Metrics, Mode, RedoResult, RedoTarget, Report, RunResult, TimelineEvent,
 } from "@/lib/types";
@@ -139,7 +140,9 @@ export default function ReportView(props: {
           Two Sum · {mode === "coach" ? "Coach" : "Interview"} mode · {Math.floor(m.sessionSeconds / 60)}m {m.sessionSeconds % 60}s
         </span>
         <span className="spacer" />
+        <a href="/dashboard">Dashboard</a>
         <button onClick={() => location.reload()}>Practice again</button>
+        <ThemeToggle />
       </header>
 
       {!report && !error && <p className="muted">Writing your feedback…</p>}
@@ -224,7 +227,7 @@ export default function ReportView(props: {
         <div><b>{m.longestSilentCodingSeconds}s</b><span>longest silent coding stretch</span></div>
       </div>
       {m.midSentencePauses !== null && (
-        <div className="stats" style={{ marginTop: 12 }}>
+        <div className="stats">
           <div>
             <b>{m.midSentencePauses}</b>
             <span>pauses of 1.5s+ mid-sentence{m.midSentencePauses > 0 && ` (longest ${m.longestPauseSeconds}s)`}</span>

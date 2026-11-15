@@ -3,6 +3,7 @@ import { useMemo, useRef } from "react";
 
 const MP3 = "audio/mpeg";
 const FETCH_TIMEOUT_MS = 20000;
+const CHARS_PER_SEC = 15; // rough speaking rate of the voice, for estimating how far into a line it got
 
 // Fetches a line of interviewer audio. Returns null when there is no premium
 // voice (TTS_PROVIDER=browser, or the provider failed).
@@ -20,13 +21,37 @@ export function useTTS() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const utterRef = useRef<SpeechSynthesisUtterance | null>(null); // held so Chrome doesn't drop it mid-speech
   const finishRef = useRef<(() => void) | null>(null); // ends the line currently being spoken
+  const lineRef = useRef({ text: "", complete: false, charIndex: 0 }); // the line being spoken, for spokenSoFar()
 
   return useMemo(() => {
     // Cuts off whatever is being said. The pending speak() resolves right away.
     const stop = () => {
       audioRef.current?.pause();
       speechSynthesis.cancel();
+      speechSynthesis.resume(); // a cancel while paused would leave Chrome's voice stuck paused
       finishRef.current?.();
+    };
+    // Holds the line mid-word and carries on from the same spot. Used while working out
+    // whether a noise on the mic is the candidate cutting in.
+    const pause = () => {
+      audioRef.current?.pause();
+      speechSynthesis.pause();
+    };
+    const resume = () => {
+      audioRef.current?.play().catch(() => finishRef.current?.());
+      speechSynthesis.resume();
+    };
+
+    // The part of the current line that has been spoken so far, cut at a word. An estimate:
+    // exact share of the clip once it has fully downloaded, a speaking-rate guess before that,
+    // and the last word boundary for the browser voice.
+    const spokenSoFar = () => {
+      const { text, complete, charIndex } = lineRef.current;
+      const a = audioRef.current;
+      let n = charIndex;
+      if (a) n = complete && a.duration > 0 && isFinite(a.duration) ? (a.currentTime / a.duration) * text.length : a.currentTime * CHARS_PER_SEC;
+      if (n >= text.length - 3) return text;
+      return text.slice(0, Math.max(0, text.lastIndexOf(" ", Math.floor(n)))).trim();
     };
 
     // Plays `text` and resolves when it finishes or is stopped; it can never hang.
@@ -34,6 +59,9 @@ export function useTTS() {
     // actually begins. Returns a blob URL of the audio for the replay, or null.
     const speak = async (text: string, onStart?: () => void): Promise<string | null> => {
       stop();
+      audioRef.current = null; // so pause/resume never touch a finished line's audio
+      lineRef.current = { text, complete: false, charIndex: 0 };
+      const line = lineRef.current;
       let over = false; // finished, stopped, or timed out
       let started = false;
       let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
@@ -84,10 +112,14 @@ export function useTTS() {
             buffer.appendBuffer(value as BufferSource);
             await new Promise((r) => buffer.addEventListener("updateend", r, { once: true }));
           }
-          if (!over && source.readyState === "open") source.endOfStream();
+          if (!over && source.readyState === "open") {
+            source.endOfStream();
+            line.complete = true; // the audio's duration is now the whole line
+          }
         } else {
           chunks.push(await res.blob());
           audio.src = URL.createObjectURL(new Blob(chunks, { type: MP3 }));
+          line.complete = true;
           audio.play().catch(finish);
         }
         await done;
@@ -100,10 +132,12 @@ export function useTTS() {
           finish();
           return null;
         }
+        audioRef.current = null;
         const u = new SpeechSynthesisUtterance(text);
         utterRef.current = u;
         u.rate = 1.05;
         u.onstart = begin;
+        u.onboundary = (e) => (line.charIndex = e.charIndex);
         u.onend = u.onerror = finish;
         speechSynthesis.speak(u);
         await done;
@@ -121,6 +155,6 @@ export function useTTS() {
       }
     };
 
-    return { speak, stop, preload };
+    return { speak, stop, pause, resume, preload, spokenSoFar };
   }, []);
 }

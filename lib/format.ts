@@ -12,6 +12,17 @@ export function numberLines(code: string) {
     .join("\n");
 }
 
+// An interviewer line as the model should remember it: what the candidate actually heard,
+// and what was cut off before it was spoken.
+function interviewerLine(e: TimelineEvent & { type: "interviewer" }) {
+  if (!e.interrupted) return e.text;
+  if (e.heard === undefined) return `${e.text} (the candidate cut in before you finished)`;
+  const rest = e.text.slice(e.heard.length).trim();
+  if (!e.heard) return `(NEVER SPOKEN, the candidate was already talking, so they heard none of this: ${e.text})`;
+  if (!rest) return e.text;
+  return `${e.heard} -- (the candidate cut in here. NOT HEARD, you never got to say: ${rest})`;
+}
+
 // Transcript as the LLM sees it. Long stretches with no candidate speech are
 // marked so the model can tell what was written without being talked about.
 export function formatTimeline(events: TimelineEvent[]) {
@@ -24,7 +35,7 @@ export function formatTimeline(events: TimelineEvent[]) {
       lines.push(`[${clock(e.start)}] CANDIDATE: ${e.text}`);
       lastSpeechEnd = e.end;
     } else if (e.type === "interviewer") {
-      lines.push(`[${clock(e.t)}] INTERVIEWER (${e.kind}): ${e.text}${e.interrupted ? " (the candidate cut in before you finished)" : ""}`);
+      lines.push(`[${clock(e.t)}] INTERVIEWER (${e.kind}): ${interviewerLine(e)}`);
     } else {
       lines.push(`[${clock(e.t)}] (candidate ran the code: ${e.summary})`);
     }
