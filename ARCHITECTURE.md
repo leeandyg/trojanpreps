@@ -37,7 +37,7 @@ Chrome is the supported browser (Deepgram streaming works anywhere with `MediaRe
 
 ### Deployed
 
-Live at https://ai-usc-hackathon.vercel.app (Vercel project `ai-usc-hackathon`). The env vars above are set in the Vercel project for Production; change them there (Settings → Environment Variables, or `npx vercel env add`), then redeploy. Deploy with `npx vercel deploy --prod` from the repo root (run `npx vercel link` first on a new machine). Pushing to GitHub does not deploy unless the Git repo is connected in the Vercel dashboard.
+Live at https://trojanpreps.vercel.app (Vercel project `trojanpreps`; the old ai-usc-hackathon.vercel.app URL also still works). The env vars above are set in the Vercel project for Production; change them there (Settings → Environment Variables, or `npx vercel env add`), then redeploy. Deploy with `npx vercel deploy --prod` from the repo root (run `npx vercel link` first on a new machine). Pushing to GitHub does not deploy unless the Git repo is connected in the Vercel dashboard.
 
 ## Stack
 
