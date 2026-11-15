@@ -10,7 +10,7 @@ An **MVP** of a voice-driven mock technical interview web app, built for the AI@
 
 ## Team
 
-- **Two developers**, both working on `main` in https://github.com/leeandyg/ai-usc-hackathon. No PR process.
+- **Two developers**, both working on `main` in https://github.com/leeandyg/trojanpreps. No PR process. (Renamed from `ai-usc-hackathon`; GitHub redirects the old URL, but update your remote with `git remote set-url origin https://github.com/leeandyg/trojanpreps.git`.)
 - The other dev may have pushed since you last looked. Run `git pull` before starting work, and pull again before pushing.
 - Keep commits small and focused so the other dev can follow and merge easily. Do not rewrite shared history (no force-push to `main`).
 - The committed docs are how the two devs stay in sync. Anything the other dev needs to know goes in them, not only in chat.
