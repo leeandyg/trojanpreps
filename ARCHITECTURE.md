@@ -2,7 +2,7 @@
 
 Built for the AI@USC hackathon (https://ai-usc.devpost.com/). The product is TrojanPreps and the interviewer is called Tommy (both in [lib/brand.ts](lib/brand.ts)).
 
-Routes: `/` is a static landing page, `/dashboard` a static dashboard (interview types; only Technical works; sample data), `/interview` is the app itself, and `/interview?demo` loads a canned session into the report. See [OPEN_ISSUES.md](OPEN_ISSUES.md) for what is untested or unfinished.
+Routes: `/` is a static landing page, `/dashboard` a static dashboard (interview types; only Technical works; sample data), `/interview` is the app itself, and `/interview?demo` loads a canned session into the report. See [OPEN_ISSUES.md](OPEN_ISSUES.md) for test status and known limitations.
 
 ## What it is and why
 
@@ -14,7 +14,7 @@ What makes it different from "mock interview with ChatGPT":
 - It knows when to stay quiet. Thinking aloud and pauses get no response.
 - The end report quotes what the candidate actually said and wrote, and measures delivery (pace, fillers, how much of the coding was narrated).
 
-Scope is deliberately small: three problems picked in the lobby (Two Sum is the default and the only one that has been demoed; Valid Parentheses and Best Time to Buy and Sell Stock were added later), one language (Python), two modes. It is hackathon code: no tests, no hardening.
+Scope is deliberately small: three problems picked in the lobby (Two Sum is the default and the one the demo uses; Valid Parentheses and Best Time to Buy and Sell Stock were added later), one language (Python), two modes. It is hackathon code: no tests, no hardening.
 
 ## Running it
 

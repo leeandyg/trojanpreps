@@ -73,10 +73,10 @@ Use Chrome with a microphone; headphones are recommended so Tommy doesn't hear i
 
 ## Limitations
 
-This is a hackathon MVP: Chrome only, Python only, three problems, and sessions are not saved (the dashboard history is sample data). See [OPEN_ISSUES.md](OPEN_ISSUES.md) for known gaps.
+This is a hackathon MVP: Chrome only, Python only, three problems, and sessions are not saved (the dashboard history is sample data). See [OPEN_ISSUES.md](OPEN_ISSUES.md) for test status and the full list.
 
 ## Docs
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): how a session flows, the interviewer's rules, the report, the file map and the demo script
-- [OPEN_ISSUES.md](OPEN_ISSUES.md): known problems and what hasn't been tested yet
+- [OPEN_ISSUES.md](OPEN_ISSUES.md): test status, known limitations and ideas for later
 - [AGENTS.md](AGENTS.md): working rules for contributors and coding agents

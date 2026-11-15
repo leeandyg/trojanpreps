@@ -45,7 +45,7 @@ An **MVP** of a voice-driven mock technical interview web app, built for the AI@
 Update the docs after every change and at the end of every session, in the same commit as the code where possible. Stale docs mislead the other dev.
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md):** any change to behavior, flow, triggers, timing values, env vars, the file map, or the demo script.
-- **[OPEN_ISSUES.md](OPEN_ISSUES.md):** add problems you find or leave behind. Remove or mark items you fix. Move items out of "Not yet tested" once they have actually been checked in a browser.
+- **[OPEN_ISSUES.md](OPEN_ISSUES.md):** add problems you find or leave behind. Remove items you fix. Keep "Status" to what has actually been checked in a browser, and keep the doc short: it is read as the state of the project.
 - **AGENTS.md (this file):** changes to stack, rules, scope, or team workflow.
 - **HANDOFF.md** (local, if present): at the end of a session, refresh state, what was verified, and next steps.
 
