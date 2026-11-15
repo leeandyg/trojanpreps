@@ -35,6 +35,10 @@ npm run dev                   # open http://localhost:3000 in Chrome (landing pa
 
 Chrome is the supported browser (Deepgram streaming works anywhere with `MediaRecorder`, but the fallback recognizer and the rest of the app are only checked in Chrome). Restart the dev server after editing `.env.local`.
 
+### Deployed
+
+Live at https://ai-usc-hackathon.vercel.app (Vercel project `ai-usc-hackathon`). The env vars above are set in the Vercel project for Production; change them there (Settings → Environment Variables, or `npx vercel env add`), then redeploy. Deploy with `npx vercel deploy --prod` from the repo root (run `npx vercel link` first on a new machine). Pushing to GitHub does not deploy unless the Git repo is connected in the Vercel dashboard.
+
 ## Stack
 
 - Next.js (App Router, TypeScript). One process serves the UI and the API routes, so keys stay on the server.
